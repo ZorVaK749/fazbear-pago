@@ -1,0 +1,34 @@
+spring:
+  application:
+    name: ms-pago
+  datasource:
+    url: ${PAGO_DB_URL:jdbc:postgresql://localhost:55432/pago}
+    username: ${PAGO_DB_USER:pago}
+    password: ${PAGO_DB_PASSWORD}
+    hikari:
+      maximum-pool-size: 16
+      connection-timeout: 5000
+  flyway:
+    locations: classpath:db/migration
+    clean-disabled: true
+  jackson:
+    deserialization:
+      fail-on-unknown-properties: true
+  mvc:
+    log-request-details: false
+server:
+  port: 8080
+  error:
+    include-message: never
+    include-stacktrace: never
+    include-binding-errors: never
+pago:
+  security:
+    tenant: ${AZURE_TENANT_ID:ee0d2c5b-e60b-4c57-9b30-8a38a520c430}
+    audience: ${AZURE_API_AUDIENCE:304fa289-2b72-447b-9c48-f00998f7c22f}
+  fixtures:
+    enabled: ${PAGO_FIXTURES_ENABLED:false}
+logging:
+  level:
+    org.springframework.jdbc: WARN
+    org.springframework.security: WARN
