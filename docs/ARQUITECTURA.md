@@ -1,5 +1,9 @@
 # Diseño propuesto — ms-pago
 
+> Referencia inicial, no inventario de funciones terminadas. F2.1 implementa un
+> subconjunto de simulación: contrato actual en `../README.md` y decisiones en
+> `DECISIONES_F2_1.md`. Kafka/Webpay/refunds/outbox/inbox siguen como propuestas.
+
 ## Límites y tecnología
 
 Autoridad del resultado de pago; no saldo FazCoins, stock, correo o creación libre
@@ -59,4 +63,5 @@ sin bridge ni publicaciones en este bloque.
 
 Cotización y coordinación Orden/Productos/Pedidos, identidad, moneda/redondeo,
 duración antifraude, roles Entra, retención, alojamiento y contratos versionados.
-No hay implementación, tests ejecutables, CI activa, imagen o E2E.
+F2.1 añade implementación/tests/imagen solo local para el subconjunto del README.
+No hay CI activa, imagen publicada ni E2E con otros servicios.
