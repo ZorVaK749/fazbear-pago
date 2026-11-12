@@ -1,0 +1,20 @@
+# Java/Maven y herramientas locales
+target/
+.idea/
+.vscode/
+*.iml
+*.log
+.DS_Store
+Thumbs.db
+# Secretos y datos locales
+.env
+.env.*
+!.env.example
+secrets/
+data/
+*.pem
+*.key
+*.p12
+*.jks
+application-local.yml
+application-local.properties
