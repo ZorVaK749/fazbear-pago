@@ -1,0 +1,19 @@
+name: Validate payment service
+on:
+  push:
+    branches: [ev3/integracion-integral]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - run: mvn -B clean verify
+      - run: docker build -t pago-validation:local .

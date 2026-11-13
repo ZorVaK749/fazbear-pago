@@ -24,9 +24,11 @@ public class PaymentService {
             WHERE instrument_id = ? AND attempted_at >= ? AND attempted_at <= ?
             """;
     private final JdbcTemplate jdbc;
+    private final PaymentEvents events;
 
-    PaymentService(JdbcTemplate jdbc) {
+    PaymentService(JdbcTemplate jdbc, PaymentEvents events) {
         this.jdbc = jdbc;
+        this.events = events;
     }
 
     @Transactional(isolation = Isolation.READ_COMMITTED, timeout = 15)
@@ -59,7 +61,7 @@ public class PaymentService {
         if (operations.isEmpty()) throw new ApiException(404, "OPERATION_NOT_FOUND");
         var operation = operations.getFirst();
         if (Boolean.TRUE.equals(jdbc.queryForObject(
-                "SELECT EXISTS(SELECT 1 FROM payment WHERE operation_id=? AND status='APPROVED')",
+                "SELECT EXISTS(SELECT 1 FROM payment WHERE operation_id=? AND status IN ('APPROVED','REFUNDED'))",
                 Boolean.class, request.operacionId()))) {
             throw new ApiException(409, "OPERATION_ALREADY_APPROVED");
         }
@@ -92,7 +94,19 @@ public class PaymentService {
         jdbc.update("""
                 UPDATE idempotency_record SET payment_id=? WHERE tenant_id=? AND owner_id=? AND key=?
                 """, paymentId, owner.tenant(), owner.oid(), key);
+        if (blocked) jdbc.update("INSERT INTO fraud_alert VALUES (?,?,?,?)", paymentId, attemptId, "MORE_THAN_3_IN_10_SECONDS", now);
+        if (status.equals("APPROVED")) events.append(paymentId, "pago.aprobado.v1", java.util.Map.of());
         return new Result(get(owner, paymentId), false);
+    }
+
+    @Transactional(readOnly = true)
+    public Result replayIfPresent(Owner owner, String key, PaymentRequest request) {
+        var records = jdbc.queryForList("SELECT request_hash,payment_id FROM idempotency_record WHERE tenant_id=? AND owner_id=? AND key=?",
+                owner.tenant(), owner.oid(), key);
+        if (records.isEmpty()) return null;
+        var record = records.getFirst();
+        if (!fingerprint(request).equals(record.get("request_hash"))) throw new ApiException(409, "IDEMPOTENCY_CONFLICT");
+        return record.get("payment_id") == null ? null : new Result(get(owner, (UUID) record.get("payment_id")), true);
     }
 
     @Transactional(readOnly = true)

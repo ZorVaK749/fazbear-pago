@@ -1,0 +1,197 @@
+name: pedidos360-ev3-integral
+x-app: &app
+  restart: "no"
+  mem_limit: 512m
+  environment: &common
+    SPRING_PROFILES_ACTIVE: ev3-local
+    SERVER_PORT: 8080
+    JAVA_TOOL_OPTIONS: -Xmx320m
+    KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+    LOCAL_JWT_JWK_SET_URI: http://lab-auth:8080/jwks
+    INTERNAL_SERVICE_KEY: ${INTERNAL_SERVICE_KEY:?Generate .env first}
+    SPRING_RABBITMQ_HOST: rabbitmq
+    SPRING_RABBITMQ_USERNAME: ev3
+    SPRING_RABBITMQ_PASSWORD: ${LOCAL_DB_PASSWORD:?Generate .env first}
+  depends_on: &deps
+    postgres:
+      condition: service_healthy
+    kafka:
+      condition: service_healthy
+    rabbitmq:
+      condition: service_healthy
+    lab-auth:
+      condition: service_started
+
+services:
+  frontend:
+    profiles: [ui]
+    build:
+      context: ${FRONTEND_REPO:-../../../fazbear-frontend-ev3-integral}
+      dockerfile: Dockerfile.local
+    ports:
+      - "127.0.0.1:18092:80"
+    depends_on:
+      - gateway
+  postgres-validation:
+    profiles: [validation]
+    image: postgres:17.7-alpine
+    environment:
+      POSTGRES_DB: ev3test
+      POSTGRES_USER: ev3
+      POSTGRES_PASSWORD: ${LOCAL_DB_PASSWORD:?Generate .env first}
+    ports:
+      - "127.0.0.1:55439:5432"
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U ev3 -d ev3test"]
+      interval: 2s
+      timeout: 3s
+      retries: 40
+  postgres:
+    image: postgres:17.7-alpine
+    environment:
+      POSTGRES_USER: ev3
+      POSTGRES_PASSWORD: ${LOCAL_DB_PASSWORD:?Generate .env first}
+    volumes:
+      - ev3_pg:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/01-databases.sql:ro
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U ev3"]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+  kafka:
+    image: apache/kafka:3.9.1
+    hostname: kafka
+    mem_limit: 1g
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+      KAFKA_HEAP_OPTS: -Xmx512m -Xms256m
+      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+    volumes:
+      - ev3_kafka:/var/lib/kafka/data
+    healthcheck:
+      test: [CMD-SHELL, "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 10s
+      retries: 40
+  rabbitmq:
+    image: rabbitmq:4.1-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: ev3
+      RABBITMQ_DEFAULT_PASS: ${LOCAL_DB_PASSWORD:?Generate .env first}
+    volumes:
+      - ev3_rabbit:/var/lib/rabbitmq
+    healthcheck:
+      test: [CMD, rabbitmq-diagnostics, -q, ping]
+      interval: 5s
+      timeout: 5s
+      retries: 40
+  lab-auth:
+    image: node:22-alpine
+    command: [node, /lab/server.mjs]
+    environment:
+      LOCAL_TOKEN_KEY: ${LOCAL_TOKEN_KEY:?Generate .env first}
+    volumes:
+      - ./lab-auth.mjs:/lab/server.mjs:ro
+    ports:
+      - "127.0.0.1:18091:8080"
+  pago:
+    <<: *app
+    build: ../..
+    environment:
+      <<: *common
+      PAGO_DB_URL: jdbc:postgresql://postgres:5432/pago
+      PAGO_DB_USER: ev3
+      PAGO_DB_PASSWORD: ${LOCAL_DB_PASSWORD}
+      ORDEN_URL: http://orden:8080
+  analytics:
+    <<: *app
+    build: ${ANALYTICS_REPO:-../../../fazbear-analytics-ev3-integral}
+    environment:
+      <<: *common
+      ANALYTICS_DB_URL: jdbc:postgresql://postgres:5432/analytics
+      ANALYTICS_DB_USER: ev3
+      ANALYTICS_DB_PASSWORD: ${LOCAL_DB_PASSWORD}
+  fidelizacion:
+    <<: *app
+    build: ${FIDELIZACION_REPO:-../../../fazbear-fidelizacion-ev3-integral}
+    environment:
+      <<: *common
+      FIDELIZACION_DB_URL: jdbc:postgresql://postgres:5432/fidelizacion
+      FIDELIZACION_DB_USER: ev3
+      FIDELIZACION_DB_PASSWORD: ${LOCAL_DB_PASSWORD}
+      PAGO_URL: http://pago:8080
+  productos:
+    <<: *app
+    build: ${PRODUCTOS_REPO:-../../../fazbear-productos-ev3-integral}
+    environment:
+      <<: *common
+      PRODUCTOS_DB_URL: jdbc:postgresql://postgres:5432/productos
+      PRODUCTOS_DB_USER: ev3
+      PRODUCTOS_DB_PASSWORD: ${LOCAL_DB_PASSWORD}
+      EV3_LOCAL_SEED: "true"
+      EV3_LOCAL_CATALOG_SNAPSHOT: "true"
+      EV3_KAFKA_ENABLED: "true"
+  carrito:
+    <<: *app
+    build: ${CARRITO_REPO:-../../../fazbear-carrito-ev3-integral}
+    environment:
+      <<: *common
+      CARRITO_DB_URL: jdbc:postgresql://postgres:5432/carrito
+      CARRITO_DB_USER: ev3
+      CARRITO_DB_PASSWORD: ${LOCAL_DB_PASSWORD}
+      EV3_KAFKA_ENABLED: "true"
+  orden:
+    <<: *app
+    build:
+      context: ${ORDEN_REPO:-../../../fazbear-orden-ev3-integral}
+      dockerfile: Dockerfile.local
+    environment:
+      <<: *common
+      ORDEN_DB_URL: jdbc:postgresql://postgres:5432/orden
+      ORDEN_DB_USER: ev3
+      ORDEN_DB_PASSWORD: ${LOCAL_DB_PASSWORD}
+      PRODUCTOS_URL: http://productos:8080
+      PAGO_URL: http://pago:8080
+      PEDIDOS_URL: http://pedidos:8080
+      MS_PEDIDOS_URL: http://pedidos:8080/api
+      MS_CARRITO_URL: http://carrito:8080/api
+  pedidos:
+    <<: *app
+    build:
+      context: ${PEDIDOS_REPO:-../../../fazbear-pedidos-ev3-integral}
+      dockerfile: Dockerfile.local
+    environment:
+      <<: *common
+      PEDIDOS_DB_URL: jdbc:postgresql://postgres:5432/pedidos
+      PEDIDOS_DB_USER: ev3
+      PEDIDOS_DB_PASSWORD: ${LOCAL_DB_PASSWORD}
+  gateway:
+    image: nginx:1.28-alpine
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "127.0.0.1:18090:8080"
+    depends_on:
+      - pago
+      - analytics
+      - fidelizacion
+      - productos
+      - carrito
+      - orden
+      - pedidos
+volumes:
+  ev3_pg:
+  ev3_kafka:
+  ev3_rabbit:

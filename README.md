@@ -1,4 +1,30 @@
-# ms-pago — MVP F2.1 / PEDIDOS360 EV3
+# ms-pago — integración integral / PEDIDOS360 EV3
+
+## Extensión integral (sobre el MVP probado F2.1)
+
+Rama `ev3/integracion-integral`. Perfil **ev3-local** importa cotizaciones de Orden
+(`ORDEN_URL`), calculadas con precios de Productos; nunca importes del navegador.
+Configurar `PAGO_DB_URL/USER/PASSWORD`, `KAFKA_BOOTSTRAP_SERVERS` e
+`INTERNAL_SERVICE_KEY` aleatoria, mínimo 32 caracteres. Fuera del perfil,
+`PAGO_REMOTE_OPERATIONS_ENABLED` y `PAGO_KAFKA_ENABLED` son opt-in explícitos.
+
+- Aprobación crea outbox en la misma transacción; publisher Kafka al menos una vez,
+  separado del lock antifraude. Consumidores deduplican por evento y causa.
+- `POST /api/pagos/{id}/anulacion`: owner + Idempotency-Key, reembolso total
+  **simulado** una sola vez; REFUNDED. No devuelve dinero real ni cancela pedido.
+- `GET /api/pagos/{id}/intentos` y `/api/pagos/me/alertas`: solo propios.
+- `GET /internal/pagos/{id}`: estado autoritativo para Orden/FazCoins, solo header
+  X-Service-Key desde entorno; JWT usuario no lo habilita. Nunca secret en Angular.
+  Endpoint no expuesto en Gateway; AWS necesitará IAM/mTLS/TLS/ACL.
+- Eventos `pago.aprobado.v1` y `pago.reembolsado.v1`: `docs/EVENTOS.md`.
+- `LOCAL_JWT_JWK_SET_URI` solo con perfil ev3-local permite el firmante sintético
+  del laboratorio; mantiene firma/issuer/tenant/audience/scope. Nunca usarlo en AWS.
+  Omitirlo para Entra real. Replay tras anulación devuelve estado actual REFUNDED.
+- FazCoins vive en ms-fidelizacion; crear pedido no acredita puntos.
+
+Entorno conjunto y pruebas en `deploy/ev3-local/`. Las siguientes instrucciones
+conservan el laboratorio aislado F2.1; el integral no carga operaciones fixture,
+sino cotizaciones nuevas del backend local. No tocar servicios/H2/AWS existentes.
 
 **Solo simulación: APPROVED no equivale a un cobro bancario.** Java 21, Spring Boot
 3.5.16, Maven, PostgreSQL 17 y Flyway. Sin H2, brokers ni conexiones a Orden/AWS.
@@ -119,5 +145,5 @@ un commit perdido no ocurrió; nunca resolverlo inventando una nueva key.
 ## Pendientes
 
 Ver `docs/DECISIONES_F2_1.md`, `tests/README.md` e informe acumulativo incluido.
-`docs/ARQUITECTURA.md` sigue como referencia futura. No Webpay, Kafka, outbox/inbox,
-refunds, FazCoins, RabbitMQ, Orden, cotización productiva, CI, registry ni AWS.
+`docs/ARQUITECTURA.md` sigue como referencia histórica. Webpay/capturas reales y AWS
+pendientes; Kafka/outbox, Orden y refunds simulados implementados en la extensión.

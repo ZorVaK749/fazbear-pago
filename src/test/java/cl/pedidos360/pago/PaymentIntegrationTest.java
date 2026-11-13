@@ -71,6 +71,7 @@ class PaymentIntegrationTest {
     @Autowired MockMvc mvc;
     @Autowired JdbcTemplate jdbc;
     @Autowired PaymentService service;
+    @Autowired RefundService refunds;
     @Autowired ObjectMapper json;
     @LocalServerPort int port;
 
@@ -432,6 +433,77 @@ class PaymentIntegrationTest {
                 .andExpect(status().isBadRequest());
         mvc.perform(get("/api/pagos/me?limit=101").header("Authorization", "Bearer " + token(ALICE, b -> {})))
                 .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void approvalAndRefundHaveDurableOutboxAndSingleCause() {
+        var paid = service.pay(ALICE, "event-payment", request(ALICE, "sim-approved")).payment();
+        assertThat(count("payment_outbox")).isEqualTo(1);
+        var first = refunds.refund(ALICE, paid.pagoId(), "refund-once");
+        assertThat(refunds.refund(ALICE, paid.pagoId(), "refund-once")).isEqualTo(first);
+        assertThat(count("payment_refund")).isEqualTo(1);
+        assertThat(count("payment_outbox")).isEqualTo(2);
+        assertThat(refunds.trusted(paid.pagoId())).containsEntry("estado", "REFUNDED")
+                .containsEntry("totalReembolsado", new BigDecimal("12990.00"));
+        assertThatThrownBy(() -> refunds.refund(BOB, paid.pagoId(), "foreign"))
+                .isInstanceOf(ApiException.class).hasMessage("PAYMENT_NOT_FOUND");
+    }
+
+    @Test
+    void concurrentRefundsCannotDuplicateReversalEvent() throws Exception {
+        var paid = service.pay(ALICE, "refund-concurrent", request(ALICE, "sim-approved")).payment();
+        var calls = new ArrayList<Callable<Map<String, Object>>>();
+        for (int i = 0; i < 8; i++) calls.add(() -> refunds.refund(ALICE, paid.pagoId(), "same-refund"));
+        assertThat(parallel(calls).stream().map(r -> r.get("reembolsoId")).distinct().count()).isEqualTo(1);
+        assertThat(count("payment_outbox")).isEqualTo(2);
+        assertThat(count("payment_attempt")).isEqualTo(1);
+    }
+
+    @Test
+    void internalPaymentLookupDoesNotAcceptUserJwtOrMissingSecret() throws Exception {
+        var paid = service.pay(ALICE, "internal-guard", request(ALICE, "sim-approved")).payment();
+        mvc.perform(get("/internal/pagos/" + paid.pagoId())).andExpect(status().isUnauthorized());
+        mvc.perform(get("/internal/pagos/" + paid.pagoId()).header("Authorization", "Bearer " + token(ALICE, b -> {})))
+                .andExpect(status().isUnauthorized());
+        mvc.perform(get("/internal/pagos/" + paid.pagoId()).header("X-Service-Key", "wrong"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void blockedAttemptCreatesAlertButNeverPaymentApprovalEvent() {
+        for (int i = 0; i < 4; i++) service.pay(ALICE, "alerts-" + i, request(ALICE, "sim-approved"));
+        assertThat(count("fraud_alert")).isEqualTo(1);
+        assertThat(count("payment_outbox")).isEqualTo(3);
+    }
+
+    @Test
+    void quoteImportUsesAuthenticatedBackendNotClientAmountAndRejectsWrongOwner() throws Exception {
+        var server = com.sun.net.httpserver.HttpServer.create(new java.net.InetSocketAddress("127.0.0.1", 0), 0);
+        UUID id = UUID.randomUUID();
+        var quote = new java.util.concurrent.atomic.AtomicReference<>(new QuoteImportService.Quote(id, ALICE.tenant(), ALICE.oid(),
+                new BigDecimal("23900.00"), "CLP", OffsetDateTime.now().plusHours(1)));
+        server.createContext("/api/orden/cotizaciones/", exchange -> {
+            if (!"Bearer synthetic-forwarded-token".equals(exchange.getRequestHeaders().getFirst("Authorization"))) {
+                exchange.sendResponseHeaders(401, -1); exchange.close(); return;
+            }
+            byte[] bytes = json.writeValueAsBytes(quote.get());
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, bytes.length);
+            try (var stream = exchange.getResponseBody()) { stream.write(bytes); }
+        });
+        server.start();
+        try {
+            var manager = new org.springframework.jdbc.datasource.DataSourceTransactionManager(jdbc.getDataSource());
+            var importer = new QuoteImportService(jdbc, new org.springframework.transaction.support.TransactionTemplate(manager),
+                    true, "http://127.0.0.1:" + server.getAddress().getPort());
+            importer.ensure(ALICE, id, "Bearer synthetic-forwarded-token");
+            var payment = service.pay(ALICE, "trusted-quote", new PaymentRequest(id, "SIMULADO", "sim-approved")).payment();
+            assertThat(payment.importe()).isEqualByComparingTo("23900.00");
+            UUID foreign = UUID.randomUUID();
+            quote.set(new QuoteImportService.Quote(foreign, ALICE.tenant(), BOB.oid(), new BigDecimal("1.00"), "CLP", OffsetDateTime.now().plusHours(1)));
+            assertThatThrownBy(() -> importer.ensure(ALICE, foreign, "Bearer synthetic-forwarded-token"))
+                    .isInstanceOf(ApiException.class).hasMessage("INVALID_TRUSTED_QUOTE");
+        } finally { server.stop(0); }
     }
 
     static <T> List<T> parallel(List<Callable<T>> calls) throws Exception {

@@ -1,6 +1,17 @@
 spring:
   application:
     name: ms-pago
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      acks: all
+      properties:
+        enable.idempotence: true
+        delivery.timeout.ms: 5000
+        request.timeout.ms: 2000
+        max.block.ms: 2000
   datasource:
     url: ${PAGO_DB_URL:jdbc:postgresql://localhost:55432/pago}
     username: ${PAGO_DB_USER:pago}
@@ -23,6 +34,11 @@ server:
     include-stacktrace: never
     include-binding-errors: never
 pago:
+  operations:
+    remote-enabled: ${PAGO_REMOTE_OPERATIONS_ENABLED:false}
+    orden-url: ${ORDEN_URL:http://localhost:8084}
+  kafka:
+    enabled: ${PAGO_KAFKA_ENABLED:false}
   security:
     tenant: ${AZURE_TENANT_ID:ee0d2c5b-e60b-4c57-9b30-8a38a520c430}
     audience: ${AZURE_API_AUDIENCE:304fa289-2b72-447b-9c48-f00998f7c22f}

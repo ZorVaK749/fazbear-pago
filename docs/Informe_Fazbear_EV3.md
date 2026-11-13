@@ -3,14 +3,16 @@
 ## 1. Estado y alcance
 
 **Última actualización:** 12/11/2026.
-**Fase actual:** F2.1 — primer MVP ejecutable ms-pago con PostgreSQL, simulación,
-antifraude transaccional y JWT. R2 aprobado en laboratorio; R3 NO autorizado.
+**Fase actual:** integración integral EV3 — Pago, Analytics y Fidelización ejecutables,
+integrados con cinco servicios/UI existentes y probados localmente. Ver sección 18.
+R2 aprobado en laboratorio; R3 NO autorizado.
 **Bloques completados:** Fase 0 aprobada; carrito F1.1 probado y publicado en rama;
 repositorios nuevos inicializados con documentación y diseño propuesto;
 F1.2/F1.3 y controles de propietario/identidad de F1.4 implementados,
 probados localmente y publicados en ramas específicas. Administración no habilitada.
-**Estado:** PAUSADO — esperando revisión de F2.1. DESPLIEGUE antiguo BLOQUEADO hasta aprobar
-conservación verificable H2; sin cambios AWS/JVM/H2 ni rescate real en F2.1.
+**Estado:** implementación y validación integral local completadas; publicación de ramas
+registrada en sección 18. DESPLIEGUE antiguo BLOQUEADO hasta aprobar conservación
+verificable H2; sin cambios AWS/H2 históricos ni rescate real.
 
 EV2 fue terminada y evaluada con **6,9/7,0**, según confirmación del estudiante.
 Observación académica comunicada: Gateway frontend con stage `$default`.
@@ -1528,4 +1530,149 @@ Publicación autorizada únicamente en `ZorVaK749/fazbear-pago`, sin merge/CI/ma
 Siguiente paso recomendado: revisar este MVP local y aprobar contrato de operaciones
 confiables y un ensayo de integración posterior. No avanzar automáticamente.
 
-**PAUSADO — esperando revisión.**
+**PAUSADO — esperando revisión.** (Estado histórico F2.1, superado por sección 18.)
+
+## 18. Integración integral ejecutable EV3 (12/11/2026)
+
+### Alcance y decisiones
+
+Autorizada la continuación integral sin pausas artificiales. Ocho worktrees aislados
+en `ev3/integracion-integral`; no merges, cambios de ramas anteriores ni publicación
+de imágenes compartidas. Pago/Analytics/Fidelización: Java21, Boot3.5.16, JDBC/Flyway.
+Servicios existentes: Boot4.1.1 conservado, perfiles PostgreSQL explícitos `ev3-local`.
+La base recuperada, FIFO/identidad Carrito F1.3 y ownership/admin fail-closed Pedidos
+F1.4 permanecen cubiertos por regresiones. No se habilitaron administradores nuevos.
+
+- Productos autoritativo → cotización inmutable Orden → Pago simulado → confirmación
+  verificada Orden → Pedido pagado idempotente. No precios ni owner del navegador
+  como autoridad; campos de precio extra rechazados en la cotización.
+- Pago: instrumentos `sim-approved`/`sim-declined`, ventana inclusiva global de10s,
+  cuarto intento bloqueado, bloqueo transaccional/concurrencia e idempotencia;
+  historial/intentos/alertas propios y reembolsos totales simulados idempotentes.
+- Outbox transaccional Pago a `pago.aprobado.v1`/`pago.reembolsado.v1`. Fidelización
+  verifica owner/importe/moneda/estado con `GET /internal/pagos/{id}` autenticado
+  por clave de servicio, antes de conciliar; nunca acredita por `pedido.creado`.
+- FazCoins: cashback configurable500 puntos base (5%, floor); política congelada
+  por pago, wallet/ledger/inbox/canjes PostgreSQL, índices únicos y bloqueo de wallet.
+  Recompensa `faz-vip` cuesta100, otorga entitlement digital persistido, no descuento
+  de checkout. Reembolso consume saldo disponible y registra deuda por puntos ya
+  gastados; saldo gastable nunca negativo, deuda bloquea canjes y abonos la amortizan.
+- Productos/Carrito: outboxes durables y eventos reales de catálogo/VIEW/SELECT y
+  ADD/UPDATE/REMOVE. Analytics valida envelope/productor/versión, deduplica inbox,
+  actualiza proyecciones y ranking por recencia/pesos/categoría/cointeracciones.
+  Fallback explícito para cold start, no lista fija presentada como personalización.
+  Kafka no sustituye RabbitMQ de compra/stock. Retries, cuarentena y DLT saneadas.
+- Angular: checkout cotización→pago→confirmación con claves reutilizables y sesión
+  protegida, recomendaciones API y FazCoins reales; reconsulta Producto al agregar
+  una recomendación para no usar precio/tipo de proyección obsoleta. Sin PAN/CVV,
+  saldos inventados o bypass MSAL. Contratos en README de servicios e INTEGRACION-EV3.md.
+
+Envelope común: `{eventId,eventType,schemaVersion:1,occurredAt,producer,aggregateId,
+aggregateVersion,correlationId,data}`. Interacciones: `producto.actualizado.v1`,
+`producto.interaccion.v1`, `carrito.actualizado.v1`. Contratos de Pago: docs/EVENTOS.md.
+
+### Evidencia local ejecutada
+
+| Componente | Tests aprobados | Fallos/errores/omitidos finales |
+|---|---:|---|
+| Pago, PostgreSQL real y restart | 41 | 0/0/0, clean verify |
+| Analytics, PostgreSQL/Kafka reales | 36 | 0/0/0, clean verify |
+| Fidelización, PostgreSQL/Kafka reales | 21 | 0/0/0, verify |
+| Orden, incluye PostgreSQL aislado | 20 | 0/0/0, verify |
+| Pedidos, incluye PostgreSQL aislado | 47 | 0/0/0, verify |
+| Productos | 40 | 0/0/0 entre suite base y opt-in PostgreSQL/Kafka |
+| Carrito | 62 | 0/0/0, verify con opt-in PostgreSQL/Kafka |
+| Angular (9 archivos) | 121 | 0 fallos; builds normal/local aprobados |
+| Total de casos distintos | **388** | No equivale a388 E2E de navegador |
+
+Los tests legados usan H2 **en memoria de nuevas JVM**, no archivos históricos.
+Los nuevos tests de integración usan PostgreSQL/Kafka locales reales. Opt-in de
+productores requiere EV3_DOCKER_TEST=true y BD `ev3_productos_test`/`ev3_carrito_test`;
+por defecto CI base los omite. Orden/Pedidos CI configura su PostgreSQL desechable.
+Workflows nuevos validan, no despliegan ni publican imágenes. Resultado remoto CI
+se debe consultar aparte: una suite local aprobada no implica Actions aprobado.
+
+Smoke HTTP real contra gateway18090, Kafka3.9.1/PostgreSQL17.7/RabbitMQ4.1 y siete
+backends en proyecto Docker **pedidos360-ev3-integral**, con JWT RSA sintéticos.
+Nueve grupos aprobados (`EV3_LOCAL_INTEGRATION_PASSED`):
+
+1. Cotización backend y rechazo de precio cliente.
+2. Pago/replay, un intento y aislamiento entre owners.
+3. Pago real del simulador → Kafka → crédito FazCoins verificado.
+4. Confirmación Pedido una sola vez, sin segundo abono por orden.
+5. Canje, replay, insuficiencia y gasto concurrente sin saldo gastable negativo.
+6. Productos/Carrito→Kafka, ADD/UPDATE/REMOVE consumidos y ranking personalizado.
+7. Cuarto intento antifraude compartido entre usuarios.
+8. Reembolso y reversa/deuda por puntos ya canjeados.
+9. Reinicio Analytics/Fidelización: igualdad exacta de wallet/resumen antes/después
+   y consumo de una nueva interacción tras el restart.
+
+UI Docker opcional construida y levantada en18092: GET /200, proxy protegido
+/api/pagos/me401 sin token y gateway /internal/pagos/test404. Esto comprueba
+servido/proxy, no login Entra ni checkout E2E de navegador.
+
+Evidencia automática privada `deploy/ev3-local/evidence.local.json`, sin tokens ni
+secretos. El harness no borra datos entre corridas; puede agotar stock de semillas.
+Duplicados de eventos, rollback, versiones y reintentos se ensayan además en suites
+de consumidor; replay HTTP no se confunde con redelivery Kafka.
+
+### Fallos encontrados y corregidos
+
+- Docker Desktop apagado: arranque local autorizado; tests no omitidos para ocultarlo.
+  Compatibilidad Testcontainers/Docker API1.44 fijada en configuración de tests.
+- Fidelización JWKS LAB rechazado bajo Compose y URI sin host lanzaba NPE: override
+  limitado a perfiles locales/hosts permitidos; pruebas de rechazo conservadas.
+- Carrito emite REMOVE con cantidad restante0: validador Analytics corregido y
+  regresión añadida; ADD0/cantidades negativas continúan rechazados.
+- Orden aceptaba campos extra aunque no confiaba sus precios: deserialización
+  estricta en perfil integral y smoke400, imagen reconstruida.
+- Empaquetado Pago sobre target interrumpido: clean verify reconstruyó jar ejecutable.
+- Nginx tenía upstream resuelto al inicio: ensayo de reinicio falló inicialmente.
+  Resolver Docker dinámico con TTL2s/whitelist de rutas y eliminación de X-Service-Key
+  público; rerun completo aprobado. No se ocultó timeout debilitando estados HTTP.
+- Spy KafkaTemplate de Carrito no coincidía con bean genérico Boot: envolver tipo
+  borrado en test, sin reemplazar Kafka real; verify62/62 aprobado.
+- Angular no aceptaba categoría libre de recomendación como Producto: consulta al
+  catálogo y regresión. Auditoría npm inicial18 hallazgos, final **0** tras Angular
+  22.2.6/build+CLI22.2.7; conflicto de peer-tree resolvió regenerando lock limpio,
+  guardando dependencias generadas anteriores en temporal, sin --force/legacy-peers.
+- Bundle productivo610.95kB excede advertencia500kB; build aprueba, no se elevó umbral.
+
+### Arranque reproducible y seguridad de laboratorio
+
+Desde repo Pago de esta rama, con siblings integrales según deploy/ev3-local/README.md:
+
+```text
+node deploy/ev3-local/init-env.mjs
+docker --context desktop-linux compose -f deploy/ev3-local/compose.yml up -d --build
+node deploy/ev3-local/smoke.mjs
+```
+
+Inicializar .env **solo una vez**; existe localmente y no se sobrescribe. No publicar
+compose config resuelto. Variables *_REPO permiten otro layout. UI opcional perfil
+`ui`, puerto18092; firmante LAB18091, gateway18090, todos loopback. PostgreSQL/Kafka/
+RabbitMQ sin puertos públicos en stack normal; perfil validation usa PostgreSQL55439.
+No ejecutar prune/down -v ni tocar R2/H2. Retiro conservador: compose down sin -v.
+
+LAB firma en RAM identidades UUID ficticias, valida firma/issuer/audience/tid/oid/scope,
+pero **no acredita login Entra real**. Para navegador Entra se debe quitar override
+LOCAL_JWT_JWK_SET_URI de los backends y registrar redirect/consent de la SPA. No se
+insertaron tokens sintéticos en almacenamiento Angular ni se cambiaron permisos Azure.
+
+### Límites pendientes y AWS
+
+Sin despliegue/reinicio AWS, compras reales, cambios R3, merge protegido, publicación
+de secretos ni sobrescritura de tags. Ninguna copia H2 real rescatada por este trabajo.
+Pendientes: login/consent/redirect Entra en navegador, respaldo H2 real verificable y
+autorización R3 antes de despliegues antiguos; PostgreSQL durable/backups/roles,
+Kafka privado TLS/ACL/SASL, secretos/IAM/red/retención/observabilidad/rate-limit,
+transporte interno seguro, SBOM/escaneo y hardening productivo. Pago no es adquirente
+bancario; no captura real/partial refunds. Reserva distribuida de stock y atomicidad
+global pago/pedido/reembolso/compensación requieren una saga adicional: no se promete
+exactly-once distribuido. Implementación integrada local no certifica producción.
+
+### Publicación y trazabilidad
+
+Los commits de implementación de ocho repos se registran en
+`docs/COMMITS_INTEGRACION_EV3.md` al publicar; todos rama `ev3/integracion-integral`.
+Este informe sustituye los pendientes **locales** F2.1, no sus restricciones AWS.

@@ -18,3 +18,4 @@ data/
 *.jks
 application-local.yml
 application-local.properties
+deploy/ev3-local/evidence.local.json

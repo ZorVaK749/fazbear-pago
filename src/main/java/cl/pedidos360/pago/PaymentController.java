@@ -15,8 +15,9 @@ import org.springframework.web.bind.annotation.*;
 @RestController
 public class PaymentController {
     private final PaymentService service;
+    private final QuoteImportService quotes;
 
-    PaymentController(PaymentService service) { this.service = service; }
+    PaymentController(PaymentService service, QuoteImportService quotes) { this.service = service; this.quotes = quotes; }
 
     @GetMapping("/health")
     Map<String, String> health() { return Map.of("status", "UP", "mode", "SIMULATION_ONLY"); }
@@ -25,7 +26,13 @@ public class PaymentController {
     ResponseEntity<Payment> pay(@AuthenticationPrincipal Jwt jwt,
                                 @RequestHeader(value = "Idempotency-Key", required = false) String key,
                                 @Valid @RequestBody PaymentRequest request) {
-        Result result = service.pay(Owner.from(jwt), key, request);
+        if (key == null || !key.matches("[A-Za-z0-9._:-]{1,128}")) throw new ApiException(400, "INVALID_IDEMPOTENCY_KEY");
+        Owner owner = Owner.from(jwt);
+        Result result = service.replayIfPresent(owner, key, request);
+        if (result == null) {
+            quotes.ensure(owner, request.operacionId(), "Bearer " + jwt.getTokenValue());
+            result = service.pay(owner, key, request);
+        }
         int status = result.payment().estado().equals("BLOCKED") ? 429 : result.replay() ? 200 : 201;
         return ResponseEntity.status(status)
                 .location(URI.create("/api/pagos/" + result.payment().pagoId()))

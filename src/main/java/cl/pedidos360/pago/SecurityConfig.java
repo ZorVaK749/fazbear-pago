@@ -1,6 +1,16 @@
 package cl.pedidos360.pago;
 
 import java.util.UUID;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import org.springframework.core.annotation.Order;
+import org.springframework.core.env.Environment;
+import org.springframework.core.env.Profiles;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+import org.springframework.web.filter.OncePerRequestFilter;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -15,9 +25,14 @@ import org.springframework.security.web.SecurityFilterChain;
 public class SecurityConfig {
     @Bean
     JwtDecoder jwtDecoder(@Value("${pago.security.tenant}") String tenant,
-                          @Value("${pago.security.audience}") String audience) {
-        var decoder = NimbusJwtDecoder.withJwkSetUri(
-                "https://login.microsoftonline.com/" + UUID.fromString(tenant) + "/discovery/v2.0/keys").build();
+                          @Value("${pago.security.audience}") String audience,
+                          @Value("${LOCAL_JWT_JWK_SET_URI:}") String localJwks, Environment environment) {
+        String keys = "https://login.microsoftonline.com/" + UUID.fromString(tenant) + "/discovery/v2.0/keys";
+        if (!localJwks.isBlank()) {
+            if (!environment.acceptsProfiles(Profiles.of("ev3-local"))) throw new IllegalStateException("LOCAL_JWKS_REQUIRES_LOCAL_PROFILE");
+            keys = localJwks;
+        }
+        var decoder = NimbusJwtDecoder.withJwkSetUri(keys).build();
         decoder.setJwtValidator(validators(tenant, audience));
         return decoder;
     }
@@ -41,6 +56,31 @@ public class SecurityConfig {
     }
 
     @Bean
+    @Order(1)
+    SecurityFilterChain internalSecurity(HttpSecurity http, @Value("${INTERNAL_SERVICE_KEY:}") String key) throws Exception {
+        var filter = new OncePerRequestFilter() {
+            @Override
+            protected void doFilterInternal(jakarta.servlet.http.HttpServletRequest request,
+                                            jakarta.servlet.http.HttpServletResponse response,
+                                            jakarta.servlet.FilterChain chain) throws java.io.IOException, jakarta.servlet.ServletException {
+                String presented = request.getHeader("X-Service-Key");
+                if (key.length() < 32 || presented == null || !MessageDigest.isEqual(key.getBytes(StandardCharsets.UTF_8), presented.getBytes(StandardCharsets.UTF_8))) {
+                    response.setStatus(401); response.setContentType("application/json");
+                    response.getWriter().write("{\"code\":\"UNAUTHORIZED_SERVICE\"}"); return;
+                }
+                SecurityContextHolder.getContext().setAuthentication(new UsernamePasswordAuthenticationToken("internal-service", null,
+                        java.util.List.of(new SimpleGrantedAuthority("SERVICE_PAYMENT_READ"))));
+                chain.doFilter(request, response);
+            }
+        };
+        return http.securityMatcher("/internal/**").csrf(c -> c.disable())
+                .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+                .authorizeHttpRequests(a -> a.anyRequest().hasAuthority("SERVICE_PAYMENT_READ"))
+                .addFilterBefore(filter, UsernamePasswordAuthenticationFilter.class).build();
+    }
+
+    @Bean
+    @Order(2)
     SecurityFilterChain security(HttpSecurity http) throws Exception {
         return http.csrf(c -> c.disable())
                 .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))

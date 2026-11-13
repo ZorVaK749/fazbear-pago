@@ -1,0 +1,12 @@
+spring:
+  datasource:
+    url: ${PAGO_DB_URL}
+    username: ${PAGO_DB_USER:pago}
+    password: ${PAGO_DB_PASSWORD}
+pago:
+  fixtures:
+    enabled: false
+  operations:
+    remote-enabled: true
+  kafka:
+    enabled: true
