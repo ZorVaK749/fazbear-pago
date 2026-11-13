@@ -22,9 +22,17 @@ Configurar `PAGO_DB_URL/USER/PASSWORD`, `KAFKA_BOOTSTRAP_SERVERS` e
   Omitirlo para Entra real. Replay tras anulación devuelve estado actual REFUNDED.
 - FazCoins vive en ms-fidelizacion; crear pedido no acredita puntos.
 
-Entorno conjunto y pruebas en `deploy/ev3-local/`. Las siguientes instrucciones
+Entorno conjunto y pruebas en [`deploy/ev3-local/`](deploy/ev3-local/README.md).
+Resultados: [informe, sección18](docs/Informe_Fazbear_EV3.md) y
+[commits de los ocho repos](docs/COMMITS_INTEGRACION_EV3.md).
+Las siguientes instrucciones
 conservan el laboratorio aislado F2.1; el integral no carga operaciones fixture,
 sino cotizaciones nuevas del backend local. No tocar servicios/H2/AWS existentes.
+
+## Referencia histórica: laboratorio aislado F2.1
+
+Las restricciones y endpoints de esta referencia describen el modo aislado sin
+opt-ins integrales; las capacidades de la sección anterior sí están implementadas.
 
 **Solo simulación: APPROVED no equivale a un cobro bancario.** Java 21, Spring Boot
 3.5.16, Maven, PostgreSQL 17 y Flyway. Sin H2, brokers ni conexiones a Orden/AWS.

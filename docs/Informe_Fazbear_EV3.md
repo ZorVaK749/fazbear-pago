@@ -1589,8 +1589,10 @@ Los tests legados usan H2 **en memoria de nuevas JVM**, no archivos históricos.
 Los nuevos tests de integración usan PostgreSQL/Kafka locales reales. Opt-in de
 productores requiere EV3_DOCKER_TEST=true y BD `ev3_productos_test`/`ev3_carrito_test`;
 por defecto CI base los omite. Orden/Pedidos CI configura su PostgreSQL desechable.
-Workflows nuevos validan, no despliegan ni publican imágenes. Resultado remoto CI
-se debe consultar aparte: una suite local aprobada no implica Actions aprobado.
+Workflows nuevos validan, no despliegan ni publican imágenes. Se verificó además
+**GitHub Actions success en los ocho repos** para revisiones registradas en
+docs/COMMITS_INTEGRACION_EV3.md; los dos primeros intentos Orden/Pedidos fallaron
+antes de tests y sus reruns corregidos aprobaron. Éxito CI no implica despliegue.
 
 Smoke HTTP real contra gateway18090, Kafka3.9.1/PostgreSQL17.7/RabbitMQ4.1 y siete
 backends en proyecto Docker **pedidos360-ev3-integral**, con JWT RSA sintéticos.
@@ -1637,6 +1639,9 @@ de consumidor; replay HTTP no se confunde con redelivery Kafka.
   22.2.6/build+CLI22.2.7; conflicto de peer-tree resolvió regenerando lock limpio,
   guardando dependencias generadas anteriores en temporal, sin --force/legacy-peers.
 - Bundle productivo610.95kB excede advertencia500kB; build aprueba, no se elevó umbral.
+- Primer Actions Orden/Pedidos falló al crear PostgreSQL: healthcheck con comillas
+  simples no reconocido por el runner. Corregido a argumentos con dobles comillas
+  en commits CI posteriores, sin modificar código funcional ni saltarse tests.
 
 ### Arranque reproducible y seguridad de laboratorio
 
