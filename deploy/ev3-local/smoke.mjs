@@ -49,14 +49,15 @@ try {
   await eventually('SERVICES_READY', async () => (await api('/api/productos', a)).status === 200);
   const catalog = (await api('/api/productos', a)).data;
   assert.ok(Array.isArray(catalog) && catalog.length >= 3, 'Backend catalog required');
-  const eligible = catalog.filter(p => p.stock >= 5).sort((x, y) => y.precio - x.precio);
+  const eligible = catalog.filter(p => p.stock >= 5 && Math.min(20, p.stock) * Number(p.precio) >= 2200)
+    .sort((x, y) => y.precio - x.precio);
   assert.ok(eligible.length, 'Stocked product required');
   const product = eligible[0];
   const quantity = Math.min(20, product.stock, Math.max(1, Math.ceil(2200 / Number(product.precio))));
   assert.ok(quantity * product.precio >= 2000, 'Catalog must support an award sufficient for digital reward');
-  const quote = async (jwt, suffix, q = quantity) => {
-    const response = await api('/api/orden/cotizaciones', jwt, 'POST', { items: [{ productoId: product.id, cantidad: q }] }, `${runId}-quote-${suffix}`);
-    assert.ok([200, 201].includes(response.status), 'Trusted quote creation must succeed');
+  const quote = async (jwt, suffix, q = quantity, quotedProduct = product) => {
+    const response = await api('/api/orden/cotizaciones', jwt, 'POST', { items: [{ productoId: quotedProduct.id, cantidad: q }] }, `${runId}-quote-${suffix}`);
+    assert.ok([200, 201].includes(response.status), `Trusted quote creation must succeed (HTTP ${response.status})`);
     return response.data;
   };
   const operation = await quote(a, 'paid');
@@ -137,9 +138,13 @@ try {
   assert.ok(personal.items.length);
   passed('product_cart_real_kafka_and_dynamic_recommendations');
 
+  // The approved order above may exhaust its selected product through RabbitMQ.
+  // Fraud attempts need a different stocked product; never reset stock/test history.
+  const fraudProduct = catalog.find(p => p.id !== product.id && p.stock > 0);
+  assert.ok(fraudProduct, 'Another stocked product is required for fraud quotes');
   for (let i = 1; i <= 4; i++) {
     const jwt = i % 2 ? a : b;
-    const q = await quote(jwt, `fraud-${i}`, 1);
+    const q = await quote(jwt, `fraud-${i}`, 1, fraudProduct);
     const result = await api('/api/pagos', jwt, 'POST', { operacionId: q.operacionId, metodo: 'SIMULADO', instrumentoPruebaId: 'sim-declined' }, `${runId}-fraud-${i}`);
     assert.equal(result.status, i === 4 ? 429 : 201);
     assert.equal(result.data.estado, i === 4 ? 'BLOCKED' : 'DECLINED');

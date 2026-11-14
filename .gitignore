@@ -10,6 +10,8 @@ Thumbs.db
 .env
 .env.*
 !.env.example
+deploy/ev3-local/.env
+deploy/ev3-local/.env.*
 secrets/
 data/
 *.pem

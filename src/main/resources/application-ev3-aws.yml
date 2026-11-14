@@ -1,0 +1,14 @@
+# No local-profile import or synthetic identity provider.
+spring:
+  datasource:
+    url: ${PAGO_DB_URL}
+    username: ${PAGO_DB_USER}
+    password: ${PAGO_DB_PASSWORD}
+pago:
+  operations:
+    remote-enabled: true
+    orden-url: ${ORDEN_URL}
+  kafka:
+    enabled: true
+  fixtures:
+    enabled: false

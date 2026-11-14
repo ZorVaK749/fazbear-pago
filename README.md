@@ -1,5 +1,9 @@
 # ms-pago — integración integral / PEDIDOS360 EV3
 
+Preparación AWS13/11: [`docs/AUDITORIA_AWS_EV3_2026-11-13.md`](docs/AUDITORIA_AWS_EV3_2026-11-13.md)
+y [`docs/AWS_DEPLOY_ROLLBACK.md`](docs/AWS_DEPLOY_ROLLBACK.md). `Dockerfile.aws`
+usa `ev3-aws`, sin JWKS LAB/fixtures; workflow GHCR nuevo manual y opt-in, no despliega.
+
 ## Extensión integral (sobre el MVP probado F2.1)
 
 Rama `ev3/integracion-integral`. Perfil **ev3-local** importa cotizaciones de Orden

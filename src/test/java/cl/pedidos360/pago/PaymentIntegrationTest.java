@@ -170,6 +170,21 @@ class PaymentIntegrationTest {
     }
 
     @Test
+    void fourthAndEverySubsequentAttemptBlockButBlockedReplayDoesNotCountAgain() {
+        for (int n=1; n<=3; n++) service.pay(ALICE, "allowed-"+n, request(ALICE,"sim-approved"));
+        var fourthRequest=request(BOB,"sim-approved");
+        var fourth=service.pay(BOB,"blocked-fourth",fourthRequest);
+        assertThat(fourth.payment().estado()).isEqualTo("BLOCKED");
+        var replay=service.pay(BOB,"blocked-fourth",fourthRequest);
+        assertThat(replay.replay()).isTrue();
+        assertThat(replay.payment().pagoId()).isEqualTo(fourth.payment().pagoId());
+        assertThat(count("payment_attempt")).isEqualTo(4);
+        assertThat(service.pay(ALICE,"blocked-fifth",request(ALICE,"sim-approved")).payment().estado()).isEqualTo("BLOCKED");
+        assertThat(jdbc.queryForList("SELECT attempts_in_window FROM antifraud_decision ORDER BY decided_at",Long.class))
+            .containsExactly(1L,2L,3L,4L,5L);
+    }
+
+    @Test
     void slidingWindowExpiresWithoutThirtyMinuteHold() {
         for (int n = 0; n < 4; n++) service.pay(ALICE, "old-" + n, request(ALICE, "sim-approved"));
         jdbc.update("UPDATE payment_attempt SET attempted_at=clock_timestamp()-interval '10.1 seconds'");

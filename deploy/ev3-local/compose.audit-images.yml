@@ -1,0 +1,25 @@
+# LOCAL TEST ONLY. Exercise packaged Dockerfile.aws jars using the existing LAB
+# profile/environment; this is NOT an AWS deployment or proof of real Entra login.
+# Build these unique local tags first. Never use this override on EC2.
+services:
+  pago:
+    image: pedidos360-audit/pago:20261113
+    pull_policy: never
+  analytics:
+    image: pedidos360-audit/analytics:20261113
+    pull_policy: never
+  fidelizacion:
+    image: pedidos360-audit/fidelizacion:20261113
+    pull_policy: never
+  productos:
+    image: pedidos360-audit/productos:20261113
+    pull_policy: never
+  carrito:
+    image: pedidos360-audit/carrito:20261113
+    pull_policy: never
+  orden:
+    image: pedidos360-audit/orden:20261113
+    pull_policy: never
+  pedidos:
+    image: pedidos360-audit/pedidos:20261113
+    pull_policy: never

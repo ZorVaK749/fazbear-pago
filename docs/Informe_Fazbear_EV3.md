@@ -2,7 +2,7 @@
 
 ## 1. Estado y alcance
 
-**Última actualización:** 12/11/2026.
+**Última actualización:** 14/11/2026. Auditoría/preparación AWS13/11: sección19.
 **Fase actual:** integración integral EV3 — Pago, Analytics y Fidelización ejecutables,
 integrados con cinco servicios/UI existentes y probados localmente. Ver sección 18.
 R2 aprobado en laboratorio; R3 NO autorizado.
@@ -1681,3 +1681,44 @@ exactly-once distribuido. Implementación integrada local no certifica producci�
 Los commits de implementación de ocho repos se registran en
 `docs/COMMITS_INTEGRACION_EV3.md` al publicar; todos rama `ev3/integracion-integral`.
 Este informe sustituye los pendientes **locales** F2.1, no sus restricciones AWS.
+
+## 19. Auditoría y preparación de imágenes AWS (13/11/2026)
+
+Nueva solicitud: auditar la rama existente, comprobar contratos/antifraude/FazCoins,
+preparar GHCR y procedimiento manual de despliegue/rollback, **sin ejecutar cambios
+AWS**. El usuario informa Pago/Analytics en EC2 separadas con RDS y Kafka Fargate,
+incluida ingestión sintética persistida por Analytics. No se verificaron esos hosts
+en esta sesión; el cierre local12/11 y sus ocho Actions no certifican estas revisiones.
+
+Informe de hallazgos, resultados actuales y pendientes:
+[AUDITORIA_AWS_EV3_2026-11-13.md](AUDITORIA_AWS_EV3_2026-11-13.md).
+Procedimiento/variables/imágenes por servicio:
+[AWS_DEPLOY_ROLLBACK.md](AWS_DEPLOY_ROLLBACK.md).
+
+Se añaden perfiles `ev3-aws` sin identidad LAB, guardas fail-closed, Dockerfile.aws
+en ocho repos, build/publicación manual GHCR versionada y contratos cruzados con
+JSON emitido por productores reales en tests. Orden/Pedidos ya no necesitan perfil
+local para activar flujo pagado; AWS bloquea POST legado que lo eludía. Se corrige
+la confirmación tardía/retry después de TTL para pagos ya aprobados por Pago.
+No se cambia regla antifraude correcta: se amplían sus regresiones4/5/replay.
+
+Ninguna EC2 EV2/JVM H2 fue contactada/reiniciada. La preparación de imágenes Carrito/
+Pedidos no autoriza su sustitución: conservación H2 viva y migración verificada
+siguen bloqueando ese rollout. Autenticación de AWS debe ser Entra real. Commits
+nuevos preparados localmente; no nuevas imágenes GHCR ni despliegue publicados aquí.
+
+### Cierre documental — 14/11/2026
+
+**457 tests distintos aprobados** (336 backend,121 Angular), cero fallos/errores/
+omitidos finales con opt-in ejecutados. Nueve grupos del smoke local con imágenes
+nuevas aprobaron; ocho Dockerfile.aws construidos y workflows nuevos lintados.
+Detalle, fallos del harness corregidos y limitaciones en la auditoría enlazada.
+Los JWT de pruebas locales no certifican login Entra real de AWS.
+
+Commits locales de los ocho repos y reusable:
+[COMMITS_AUDITORIA_AWS_EV3.md](COMMITS_AUDITORIA_AWS_EV3.md).
+Sin push de esta auditoría, publicación GHCR, creación de infraestructura o deploy.
+Las imágenes a generar en GHCR son Pago, Analytics, Fidelización, Productos, Carrito,
+Orden, Pedidos y Angular opcional; tags únicos por SHA/run/attempt, despliegue futuro
+por digest. Se requiere publicar/autorizar los workflows antes de obtener esos digests.
+H2 vivo, esquemas/migración/catálogo, destinos/red y Entra real continúan pendientes.

@@ -1,0 +1,54 @@
+name: Actual producer to Analytics contract (manual, isolated)
+on:
+  workflow_dispatch:
+    inputs:
+      productos_ref:
+        description: Productos commit or EV3 branch
+        default: ev3/integracion-integral
+        type: string
+      carrito_ref:
+        description: Carrito commit or EV3 branch
+        default: ev3/integracion-integral
+        type: string
+      analytics_ref:
+        description: Analytics commit or EV3 branch
+        default: ev3/integracion-integral
+        type: string
+permissions:
+  contents: read
+jobs:
+  contracts:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: fazbear-pago-ev3-integral
+      - uses: actions/checkout@v4
+        with:
+          repository: ZorVaK749/fazbears-productos
+          ref: ${{ inputs.productos_ref }}
+          path: fazbear-productos-ev3-integral
+      - uses: actions/checkout@v4
+        with:
+          repository: ZorVaK749/fazbear-carrito
+          ref: ${{ inputs.carrito_ref }}
+          path: fazbear-carrito-ev3-integral
+      - uses: actions/checkout@v4
+        with:
+          repository: ZorVaK749/fazbear-analytics-recommendations
+          ref: ${{ inputs.analytics_ref }}
+          path: fazbear-analytics-ev3-integral
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+          cache-dependency-path: '**/pom.xml'
+      - name: Record exact contract revisions
+        shell: bash
+        run: |
+          for repo in fazbear-*-ev3-integral; do printf '%s ' "$repo"; git -C "$repo" rev-parse HEAD; done
+      - name: Export actual producer payloads and consume with real Kafka/PostgreSQL
+        shell: pwsh
+        run: ./fazbear-pago-ev3-integral/deploy/contracts/verify-producers.ps1
