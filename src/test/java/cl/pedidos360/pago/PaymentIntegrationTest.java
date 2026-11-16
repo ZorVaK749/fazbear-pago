@@ -47,7 +47,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @AutoConfigureMockMvc
-@Testcontainers
+@Testcontainers(disabledWithoutDocker = true)
 @Import(PaymentIntegrationTest.Keys.class)
 class PaymentIntegrationTest {
     static final String TENANT = "ee0d2c5b-e60b-4c57-9b30-8a38a520c430";

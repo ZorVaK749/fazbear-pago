@@ -21,6 +21,10 @@ import com.github.dockerjava.api.model.ExposedPort;
 class PaymentRestartTest {
     @Test
     void paymentAndIdempotencySurviveDatabaseAndApplicationRestart() throws Exception {
+        org.junit.jupiter.api.Assumptions.assumeTrue(
+            org.testcontainers.DockerClientFactory.instance().isDockerAvailable(),
+            "Docker unavailable; skipping container test"
+        );
         // Brand-new container belonging ONLY to this test, never a Compose/R2 DB.
         try (var postgres = new PostgreSQLContainer<>("postgres:17.7-alpine")
                 .withDatabaseName("restart_test").withUsername("synthetic").withPassword("synthetic-test-only")) {
