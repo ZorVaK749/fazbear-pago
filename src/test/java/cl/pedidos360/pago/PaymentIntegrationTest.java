@@ -56,6 +56,7 @@ class PaymentIntegrationTest {
     static final Owner ALICE = new Owner(UUID.fromString(TENANT), UUID.fromString("00000000-0000-4000-8000-000000000001"));
     static final Owner BOB = new Owner(UUID.fromString(TENANT), UUID.fromString("00000000-0000-4000-8000-000000000002"));
 
+    @SuppressWarnings("resource")
     @Container
     static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("postgres:17.7-alpine")
             .withDatabaseName("pago_test").withUsername("synthetic").withPassword("synthetic-test-only");

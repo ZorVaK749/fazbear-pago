@@ -20,6 +20,7 @@ import com.github.dockerjava.api.model.ExposedPort;
 
 class PaymentRestartTest {
     @Test
+    @SuppressWarnings("resource")
     void paymentAndIdempotencySurviveDatabaseAndApplicationRestart() throws Exception {
         org.junit.jupiter.api.Assumptions.assumeTrue(
             org.testcontainers.DockerClientFactory.instance().isDockerAvailable(),

@@ -115,7 +115,8 @@ public class SecurityConfig {
             "https://p5gsy16utd.execute-api.us-east-1.amazonaws.com",
             "http://localhost:4200"));
         cors.setAllowedMethods(List.of("GET", "POST", "OPTIONS"));
-        cors.setAllowedHeaders(List.of("Authorization", "Content-Type", "Accept", "Origin", "X-Requested-With"));
+        cors.setAllowedHeaders(List.of("Authorization", "Content-Type", "Accept", "Origin",
+                "X-Requested-With", "Idempotency-Key"));
         cors.setAllowCredentials(false);
         cors.setMaxAge(3600L);
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
