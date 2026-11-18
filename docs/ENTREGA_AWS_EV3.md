@@ -4,6 +4,7 @@ GitHub mantiene el código en `ev3/integracion-integral`. GitHub Actions ejecuta
 las suites, construye `Dockerfile.aws` para `linux/amd64` y publica por versión
 en GHCR. La ejecución de CI no cambia EC2, Gateway ni la base viva. Usar
 durante el despliegue los digests confirmados para la revisión aprobada.
+[Referencias GHCR de la entrega](IMAGENES_EV3_2026-11-18.md).
 
 ## Checklist antes del corte
 
@@ -77,6 +78,13 @@ Mantener `SPRING_SQL_INIT_MODE=never`. Antes de levantar el contenedor, correr
 `catalogo.sha256`. Una vez iniciado, consultar el catálogo con una sesión
 Entra y cotejar los 23 IDs, precios y stocks antes de habilitar compras.
 
+Para inicializar las recomendaciones desde el catálogo restaurado, habilitar
+`EV3_AWS_CATALOG_SNAPSHOT=true` en el primer arranque autorizado de Productos
+con Kafka operativo. Esto encola los 23 snapshots en el outbox sin escribir
+stock. Verificar que Analytics use esos snapshots y quitar la opción para los
+próximos arranques. Si ya existen eventos sintéticos con versiones mayores que
+el outbox restaurado, conciliar la proyección y sus versiones antes del corte.
+
 ## Comandos por EC2
 
 Usar la ruta del repo y la rama EV3 y asignar `IMAGE` con la referencia completa
@@ -134,9 +142,17 @@ docker run -d --name "$CURRENT" --restart unless-stopped \
 
 ## Gateway y verificación final
 
+El 18/11/2026 el frontend público respondió HTTP 200. En el stage `ev3`,
+el preflight desde ese origen para cotización, pago y canje devolvió HTTP 204
+sin `Access-Control-Allow-Origin` ni `Access-Control-Allow-Headers`.
+Corregir la política en Gateway o en la integración que responde a OPTIONS y
+repetir la comprobación antes de habilitar el frontend nuevo.
+
 Inventariar desde CloudShell en la cuenta correcta:
 
 ```bash
+aws apigatewayv2 get-api --region us-east-1 --api-id uuzifgcyd2 \
+  --query 'CorsConfiguration' --output json
 aws apigatewayv2 get-stage --region us-east-1 --api-id uuzifgcyd2 --stage-name ev3
 aws apigatewayv2 get-routes --region us-east-1 --api-id uuzifgcyd2 \
   --query 'Items[].[RouteKey,AuthorizationType,Target]' --output table
@@ -147,6 +163,21 @@ curl -i -X OPTIONS 'https://uuzifgcyd2.execute-api.us-east-1.amazonaws.com/ev3/a
   -H 'Access-Control-Request-Method: POST' \
   -H 'Access-Control-Request-Headers: authorization,content-type,idempotency-key'
 ```
+
+Si el HTTP API tiene CORS administrado en Gateway, revisar el JSON actual y
+guardar una versión actualizada en `cors-ev3.json`. Conservar los orígenes y
+métodos autorizados existentes e incluir el origen del frontend, los métodos
+GET, POST, PUT, DELETE y OPTIONS, y los headers Authorization, Content-Type e
+Idempotency-Key. Aplicar la configuración revisada en la ventana de despliegue:
+
+```bash
+aws apigatewayv2 update-api --region us-east-1 --api-id uuzifgcyd2 \
+  --cors-configuration file://cors-ev3.json
+```
+
+Verificar si el stage usa publicación automática antes de activar la revisión y
+repetir los OPTIONS. Si una integración explícita gestiona OPTIONS, corregir en
+ese destino y verificar que el preflight sea accesible desde el navegador.
 
 - [ ] Las integraciones privadas reenvían `/api/…` al ALB con el header de
   selección de servicio esperado, y el stage `/ev3` queda fuera del path del
