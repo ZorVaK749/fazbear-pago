@@ -18,7 +18,7 @@ GHCR. Las referencias incluyen el digest del índice de imagen empleable con
 | Pago | `84d8aca` | [44363569697](https://github.com/ZorVaK749/fazbear-pago/actions/runs/44363569697) | `ghcr.io/zorvak749/fazbear-pago@sha256:7185f4a6b38d6e28a2f9cb7de5dcf7610c568d0d44cd26bd208ab8e4d87a3a3d` |
 | Pedidos | `0913fb5` | [44362124109](https://github.com/ZorVaK749/fazbears-pedidos/actions/runs/44362124109) | `ghcr.io/zorvak749/fazbears-pedidos@sha256:2ee37f89758573b1d07d620ba2e4430553885da152455efe53d5e3fa1974d765` |
 | Productos | `c82cc33` | [44363960937](https://github.com/ZorVaK749/fazbears-productos/actions/runs/44363960937) | `ghcr.io/zorvak749/fazbears-productos@sha256:cf5779c2fa85e461a222f826035b874b6f2fa312e47190077a3e2e61f6447c1f` |
-| Reportes | `eec30cd` | [44362143279](https://github.com/ZorVaK749/fazbear-reportes/actions/runs/44362143279) | `ghcr.io/zorvak749/fazbear-reportes@sha256:4d44328b23febb63af1186730a4d6550ae280e83408fc24ae16e2624a0f3184f` |
+| Reportes | `24b14ea` | [44365080009](https://github.com/ZorVaK749/fazbear-reportes/actions/runs/44365080009) | `ghcr.io/zorvak749/fazbear-reportes@sha256:a874105db34f64563604049acdb772937016807d22164198c1477238fa234865` |
 
 Por EC2, copiar la referencia de su servicio de la tabla, consultar el
 contenedor actual y traer la imagen antes de la ventana de corte.
@@ -41,10 +41,11 @@ imagen EV3 desactiva la semilla automática en AWS.
   de CI. Pasaron el respaldo y restauración sintéticos con stock variable y el
   encolado de 23 snapshots en el perfil AWS.
 - Angular aprobó sus nueve archivos de pruebas y el build de producción.
+- Reportes verificó la exigencia del app role configurado y del scope delegado.
 - La prueba integral pasó los preflights en los servicios, el flujo de compra
   simulada, el pedido único, los eventos Kafka, las recomendaciones y los
   movimientos FazCoins. Usó identidades y datos sintéticos en GitHub Actions.
-  [Prueba integral](https://github.com/ZorVaK749/fazbear-pago/actions/runs/44363569763)
+  [Prueba integral con las revisiones finales de los servicios del flujo](https://github.com/ZorVaK749/fazbear-pago/actions/runs/44363569763/attempts/2)
 
 Antes de habilitar tráfico, faltan el respaldo vivo de Productos y el cotejo de
 su restauración, el ajuste de CORS en el Gateway, el destino de Fidelización y

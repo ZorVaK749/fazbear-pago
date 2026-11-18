@@ -35,9 +35,12 @@ durante el despliegue los digests confirmados para la revisión aprobada.
   Confirmar parámetros y credenciales de BD y brokers desde el archivo privado
   de cada EC2. Mantener `/internal/**` fuera de API Gateway.
 - [ ] Confirmar stage `ev3`, JWT Entra con `access_as_user`, CORS y redirect URI
-  de la SPA. Los reportes administrativos requieren una política y app role de
-  Entra confirmados. La interfaz sigue bloqueando esa pantalla mientras falta
-  ese contrato de permisos.
+  de la SPA. Para publicar las rutas administrativas de Reportes, confirmar
+  el app role asignado en Entra y pasar su valor exacto en `REPORTES_ADMIN_ROLE`.
+  La API exige el claim `roles` con ese valor y el scope delegado
+  `access_as_user`. Con el valor vacío, solo queda accesible el health de
+  Reportes. La pantalla de administración requiere habilitación aparte cuando
+  se confirme el contrato de Entra.
 
 ## Respaldo de Productos
 
@@ -132,8 +135,8 @@ docker run -d --name "$CURRENT" --restart unless-stopped \
 | Carrito | `fazbear-carrito` | `8083:8083` | `GET /api/carrito/me` con Entra |
 | Pedidos | `fazbears-pedidos` | `8082:8082` | Historial propio y confirmación pagada |
 | Productos | `fazbears-productos` | `8081:8081` | `GET /api/productos` con Entra y stock cotejado |
-| Orden | `fazbear-orden` | `8084:8080` | `GET /api/orden/health` |
-| Notificaciones | `fazbear-notificaciones` | `8085:8085` | `GET /api/notificaciones/health` |
+| Orden | `fazbear-orden` | `8084:8080` | `GET /api/orden/health` con Entra |
+| Notificaciones | `fazbear-notificaciones` | `8085:8085` | `GET /api/notificaciones/health` con Entra |
 | Reportes | `fazbear-reportes` | `8086:8086` | `GET /api/reportes/health` |
 | Pago | `fazbear-pago` | `8087:8080` | `GET /health` |
 | Analytics | `fazbear-analytics-recommendations` | `8088:8080` | `GET /health` |
