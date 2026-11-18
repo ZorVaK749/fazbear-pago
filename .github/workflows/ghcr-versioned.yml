@@ -3,6 +3,10 @@ on:
   push:
     branches:
       - ev3/integracion-integral
+    paths-ignore:
+      - 'docs/**'
+      - 'deploy/ev3-local/**'
+      - '.github/workflows/ev3-integration.yml'
   workflow_dispatch:
     inputs:
       publish:

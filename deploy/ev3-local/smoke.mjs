@@ -45,10 +45,29 @@ function docker(args, input) {
   return result.stdout.trim();
 }
 try {
-  const a = await token(alice), b = await token(bob);
-  await eventually('SERVICES_READY', async () => (await api('/api/productos', a)).status === 200);
-  const catalog = (await api('/api/productos', a)).data;
-  assert.ok(Array.isArray(catalog) && catalog.length >= 3, 'Backend catalog required');
+  const a = await eventually('LAB_AUTH_READY', () => token(alice)), b = await token(bob);
+  // The web server can answer while Product's CommandLineRunner is still seeding.
+  const catalog = await eventually('CATALOG_READY', async () => {
+    const { status, data } = await api('/api/productos', a);
+    return status === 200 && Array.isArray(data) && data.length === 23 ? data : null;
+  });
+  const origin = 'https://p5gsy16utd.execute-api.us-east-1.amazonaws.com';
+  for (const path of ['/api/orden/cotizaciones', '/api/pagos', '/api/fidelizacion/me/canjes']) {
+    await eventually('CORS_' + path, async () => {
+      const response = await fetch(base + path, {
+        method: 'OPTIONS',
+        headers: {
+          Origin: origin,
+          'Access-Control-Request-Method': 'POST',
+          'Access-Control-Request-Headers': 'authorization,content-type,idempotency-key',
+        },
+      });
+      const allowed = response.headers.get('access-control-allow-headers')?.toLowerCase() ?? '';
+      return response.ok && response.headers.get('access-control-allow-origin') === origin
+        && allowed.split(',').map(header => header.trim()).includes('idempotency-key');
+    });
+  }
+  passed('Checkout and loyalty CORS preflights');
   const eligible = catalog.filter(p => p.stock >= 5 && Math.min(20, p.stock) * Number(p.precio) >= 2200)
     .sort((x, y) => y.precio - x.precio);
   assert.ok(eligible.length, 'Stocked product required');
