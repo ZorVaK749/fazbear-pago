@@ -1,0 +1,52 @@
+name: EV3 integration with isolated synthetic data
+on:
+  push:
+    branches: [ev3/integracion-integral]
+    paths:
+      - '.github/workflows/ev3-integration.yml'
+      - 'deploy/ev3-local/**'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  checkout-and-events:
+    if: github.ref == 'refs/heads/ev3/integracion-integral'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: fazbear-pago
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: fazbear-pago
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.19.0'
+      - name: Check out the service sources and record the exact revisions
+        shell: bash
+        run: |
+          checkout() {
+            git clone -q --depth 1 --branch ev3/integracion-integral \
+              "https://github.com/ZorVaK749/$1.git" "../$2-ev3-integral"
+            printf '%s %s\n' "$1" "$(git -C "../$2-ev3-integral" rev-parse HEAD)"
+          }
+          checkout fazbear-analytics-recommendations fazbear-analytics
+          checkout fazbear-fidelizacion fazbear-fidelizacion
+          checkout fazbears-productos fazbear-productos
+          checkout fazbear-carrito fazbear-carrito
+          checkout fazbear-orden fazbear-orden
+          checkout fazbears-pedidos fazbear-pedidos
+      - name: Build and start disposable services
+        run: |
+          node deploy/ev3-local/init-env.mjs
+          docker compose -f deploy/ev3-local/compose.yml up -d --build
+      - name: Verify checkout, Kafka events, recommendations and FazCoins
+        run: node deploy/ev3-local/smoke.mjs
+      - name: Save synthetic integration results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ev3-integration-results
+          path: fazbear-pago/deploy/ev3-local/evidence.local.json
+          if-no-files-found: ignore

@@ -38,7 +38,7 @@ async function api(path, jwt, method = 'GET', body, key) {
   return { status: response.status, data, replay: response.headers.get('Idempotency-Replayed') };
 }
 function passed(name) { checks.push({ name, passed: true }); console.log(`PASS ${name}`); }
-const compose = ['--context', 'desktop-linux', 'compose', '-f', fileURLToPath(new URL('compose.yml', root))];
+const compose = ['compose', '-f', fileURLToPath(new URL('compose.yml', root))];
 function docker(args, input) {
   const result = spawnSync('docker', [...compose, ...args], { encoding: 'utf8', input, timeout: 120000 });
   assert.equal(result.status, 0, 'Scoped Docker command failed');
