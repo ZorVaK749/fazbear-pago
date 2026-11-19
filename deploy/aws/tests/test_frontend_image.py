@@ -81,6 +81,25 @@ class FrontendRolloutTests(unittest.TestCase):
         self.assertEqual([call.args[0] for call in fetch.call_args_list],
                          ["/checkout", "/main-RPXEOIZS.js", "/chunk-DMbAa7AA.js"])
 
+    def test_verify_waits_for_existing_revision_without_registering_or_updating(self):
+        deploying = dict(SERVICE, deployments=[{}, {}])
+        with patch.object(frontend, "aws", side_effect=[{"Account": frontend.ACCOUNT}, TASK]) as aws, \
+             patch.object(frontend, "find_service", return_value=("cluster", deploying)), \
+             patch.object(frontend, "wait_stable") as stable, patch.object(frontend, "verify_checkout") as checkout, \
+             redirect_stdout(io.StringIO()):
+            frontend.execute("verify", OLD)
+        self.assertEqual([call.args[1] for call in aws.call_args_list], ["get-caller-identity", "describe-task-definition"])
+        stable.assert_called_once_with("cluster", "frontend-existing", frontend.FAMILY + ":2")
+        checkout.assert_called_once()
+
+    def test_verify_rejects_a_different_digest_in_the_current_revision(self):
+        with patch.object(frontend, "aws", side_effect=[{"Account": frontend.ACCOUNT}, TASK]), \
+             patch.object(frontend, "find_service", return_value=("cluster", SERVICE)), \
+             patch.object(frontend, "wait_stable") as stable, redirect_stdout(io.StringIO()):
+            with self.assertRaisesRegex(frontend.RolloutError, "digest distinto"):
+                frontend.execute("verify", NEW)
+        stable.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -199,7 +199,9 @@ y su stock se protegen con el procedimiento de la guía base.
 - [x] Confirmar H2 montado en Productos con el inventario SSM.
 - [x] Abrir y verificar los respaldos de los 23 productos con el driver de H2 de la imagen activa.
 - [x] Aplicar los precios CLP en una copia, comprobar IDs y stock, y confirmar el Target Group healthy.
-- [ ] Actualizar Carrito, Orden, Notificaciones y Frontend por digest.
+- [x] Actualizar Carrito, Orden y Notificaciones por digest y verificar sus Target Groups.
+- [x] Registrar la revisión Fargate `:4` con el digest CLP y comprobar el checkout público actualizado.
+- [ ] Confirmar en ECS el estado estable de la revisión CLP.
 - [ ] Validar carrito guardado, nueva cotización y pago Webpay en el entorno de integración.
 
 El orden del cambio, el comando de inventario y las condiciones para recuperar
@@ -226,3 +228,11 @@ la IP privada actual de Productos. `--dry-run` adelanta el inventario;
 `--verify --service carrito` comprueba una activación pendiente sin
 reiniciar el contenedor. `--recover --service carrito` recupera un corte
 interrumpido antes de iniciar el candidato.
+
+Si el registro de una revisión de Fargate termina antes de que ECS confirme
+estabilidad, retomar la comprobación de la revisión que ya usa el servicio.
+
+```bash
+python3 deploy/aws/frontend_image.py --verify --image \
+  ghcr.io/zorvak749/fazbears-frontend@sha256:010cd44c011df91d13101b5f7be744861324161ca0803d760191f5ce1de53606
+```

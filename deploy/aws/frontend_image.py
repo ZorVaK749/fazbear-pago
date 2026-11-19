@@ -100,17 +100,19 @@ def execute(mode, image):
     current = service["taskDefinition"]
     task = aws("ecs", "describe-task-definition", "--task-definition", current, "--include", "TAGS")
     config, original = registration(task, image)
-    print(f"Servicio: {service_name}\nRevisión anterior: {current}\nImagen actual: {original}\nImagen solicitada: {image}", flush=True)
+    print(f"Servicio: {service_name}\nRevisión actual: {current}\nImagen actual: {original}\nImagen solicitada: {image}", flush=True)
     if mode == "dry-run":
         return
-    if service.get("deploymentController", {}).get("type", "ECS") != "ECS" or len(service["deployments"]) != 1:
+    if mode == "verify" and original != image:
+        raise RolloutError("La revisión activa de Fargate usa un digest distinto del solicitado.")
+    if mode == "apply" and (service.get("deploymentController", {}).get("type", "ECS") != "ECS"
+                            or len(service["deployments"]) != 1):
         raise RolloutError("El servicio tiene un despliegue en curso o usa un controlador distinto de ECS.")
-    if original != image:
+    new = current
+    if mode == "apply" and original != image:
         new = aws("ecs", "register-task-definition", input_json=config)["taskDefinition"]["taskDefinitionArn"]
         print(f"Revisión registrada: {new}", flush=True)
         aws("ecs", "update-service", "--cluster", cluster, "--service", service_name, "--task-definition", new)
-    else:
-        new = current
     wait_stable(cluster, service_name, new)
     verify_checkout()
     print("Frontend Fargate estable. El checkout público sirve el botón Webpay.")
@@ -123,10 +125,11 @@ def main():
         modes.add_argument("--" + mode, dest="mode", action="store_const", const=mode)
     parser.add_argument("--image")
     args = parser.parse_args()
-    if args.mode != "verify" and (not args.image or not IMAGE_DIGEST.fullmatch(args.image)):
+    if (args.image is None and args.mode != "verify") or (
+            args.image is not None and not IMAGE_DIGEST.fullmatch(args.image)):
         parser.error("--image requiere una referencia al paquete Angular por digest GHCR")
     try:
-        if args.mode == "verify":
+        if args.mode == "verify" and args.image is None:
             verify_checkout()
             print("El checkout público sirve el botón Webpay.")
         else:
