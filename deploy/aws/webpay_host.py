@@ -95,6 +95,15 @@ def replace_webpay_lines(content, overrides):
     return result + "".join(f"{key}={value}\n" for key, value in overrides.items()).encode()
 
 
+def system_release():
+    try:
+        fields = env_values(Path("/etc/os-release").read_text(encoding="utf-8").splitlines())
+    except (OSError, UnicodeError):
+        return "desconocido"
+    values = [fields.get(key, "").strip('"') for key in ("ID", "VERSION_ID")]
+    return " ".join(value for value in values if re.fullmatch(r"[A-Za-z0-9_.-]{1,40}", value)) or "desconocido"
+
+
 def webpay_overrides(source):
     if source == "ssm":
         role_env = {key: value for key, value in os.environ.items() if not key.startswith("AWS_")}
@@ -250,7 +259,7 @@ class Host:
             time.sleep(3)
         raise RolloutError("El health local no alcanzó HTTP 200 en la modalidad esperada.")
 
-    def status(self, source, dry_run):
+    def status(self, source, dry_run, check_credentials=False):
         phase = self.state().get("phase", "none")
         print(f"Diario Webpay · fase {phase}")
         current = self.find(CONTAINER)
@@ -265,6 +274,7 @@ class Host:
         mode = self.mode()
         print(f"EC2 Pago · contenedor {current['Id'][:12]}")
         print(f"Health local: {mode or 'sin HTTP 200 esperado'}")
+        print(f"Sistema EC2: {system_release()}")
         print(f"psql para rollback: {'disponible' if shutil.which('psql') else 'ausente'}")
         if dry_run:
             print(f"Plan: respaldo privado, candidato con digest actual, corte y verificación · origen {source}")
@@ -275,6 +285,9 @@ class Host:
                 private_file(path)
             if not mode or not current["State"]["Running"]:
                 raise RolloutError("El contenedor actual debe estar sano antes del corte.")
+            if check_credentials:
+                webpay_overrides(source)
+                print("Credenciales Webpay: lectura y formato verificados.")
 
     def apply(self, source):
         old = self.inspect(CONTAINER)
@@ -436,13 +449,16 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("mode", choices=MODES)
     parser.add_argument("source", choices=("ssm", "host-file"))
+    parser.add_argument("--check-credentials", action="store_true")
     args = parser.parse_args()
+    if args.check_credentials and args.mode != "dry-run":
+        parser.error("--check-credentials requiere dry-run")
     try:
         if os.geteuid() != 0:
             raise RolloutError("La ejecución remota requiere root.")
         host = Host()
         if args.mode in {"status", "dry-run"}:
-            host.status(args.source, args.mode == "dry-run")
+            host.status(args.source, args.mode == "dry-run", args.check_credentials)
         else:
             with host.locked():
                 if args.mode == "apply":

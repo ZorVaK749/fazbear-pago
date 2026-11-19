@@ -92,12 +92,13 @@ def wait_for_target(arn, target_id, interval, sole=True):
     raise RolloutError("Target Group sin salud estable. Se conservó el contenedor activo. Use --status.")
 
 
-def ssm_request(mode, source):
+def ssm_request(mode, source, check_credentials=False):
     # Only reviewed code and allowlisted switches travel in Run Command parameters.
     script = base64.b64encode(gzip.compress(HOST_SCRIPT.read_bytes(), mtime=0)).decode()
     commands = ["exec bash -s <<'PEDIDOS360_WEBPAY'", "set -euo pipefail", "{"]
     commands.extend(f"printf %s '{script[i:i + 2000]}'" for i in range(0, len(script), 2000))
-    commands.extend([f"}} | base64 -d | gzip -dc | python3 - {mode} {source}", "PEDIDOS360_WEBPAY"])
+    check = " --check-credentials" if check_credentials else ""
+    commands.extend([f"}} | base64 -d | gzip -dc | python3 - {mode} {source}{check}", "PEDIDOS360_WEBPAY"])
     return {
         "DocumentName": "AWS-RunShellScript",
         "InstanceIds": [INSTANCE],
@@ -107,8 +108,8 @@ def ssm_request(mode, source):
     }
 
 
-def run_host(mode, source):
-    request = json.dumps(ssm_request(mode, source))
+def run_host(mode, source, check_credentials=False):
+    request = json.dumps(ssm_request(mode, source, check_credentials))
     command = aws("ssm", "send-command", "--cli-input-json", request)["Command"]["CommandId"]
     print(f"SSM Command ID: {command}", flush=True)
     deadline = time.monotonic() + 480
@@ -129,7 +130,7 @@ def run_host(mode, source):
     raise RolloutError("SSM sigue sin confirmar el resultado. Revise el Command ID antes de reintentar.")
 
 
-def execute(mode, source, requested_target):
+def execute(mode, source, requested_target, check_credentials=False):
     if aws("sts", "get-caller-identity").get("Account") != ACCOUNT:
         raise RolloutError(f"La sesión AWS debe corresponder a la cuenta {ACCOUNT}.")
     if requested_target and requested_target.split(":")[4] != ACCOUNT:
@@ -140,12 +141,12 @@ def execute(mode, source, requested_target):
         initial = target_state(arn, target_id, sole=mutating or mode == "dry-run")
     except RolloutError:
         if mode == "status":
-            run_host(mode, source)
+            run_host(mode, source, check_credentials)
         raise
     print(f"Target Group: {arn}\nDestino {target_id}:{PORT} · estado inicial {initial}", flush=True)
     if mode in {"apply", "dry-run"} and initial != "healthy":
         raise RolloutError("El Target Group de Pago debe estar healthy antes de activar Webpay.")
-    run_host(mode, source)
+    run_host(mode, source, check_credentials)
     if mutating:
         wait_for_target(arn, target_id, interval)
 
@@ -156,12 +157,16 @@ def main():
     for mode in MODES:
         methods.add_argument(f"--{mode}", dest="mode", action="store_const", const=mode)
     parser.add_argument("--source", choices=("ssm", "host-file"), default="ssm")
+    parser.add_argument("--check-credentials", action="store_true",
+                        help="Con --dry-run, comprueba lectura y formato de credenciales sin exponer valores.")
     parser.add_argument("--target-group-arn")
     args = parser.parse_args()
     if args.target_group_arn and not TARGET_ARN.fullmatch(args.target_group_arn):
         parser.error("ARN de Target Group inválido para us-east-1")
+    if args.check_credentials and args.mode != "dry-run":
+        parser.error("--check-credentials requiere --dry-run")
     try:
-        execute(args.mode, args.source, args.target_group_arn)
+        execute(args.mode, args.source, args.target_group_arn, args.check_credentials)
     except RolloutError as error:
         print(f"ERROR: {error}", file=sys.stderr)
         return 1

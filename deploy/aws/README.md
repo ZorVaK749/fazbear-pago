@@ -28,6 +28,12 @@ SecureString. Si hay más de un Target Group que coincide, añadir
 exige que el registro de Pago en 8087 sea el único destino del grupo y que
 comience en estado `healthy`.
 
+Antes de activar, comprobar que `psql` está disponible para el rollback y
+validar la lectura de credenciales desde la EC2 con
+`python3 deploy/aws/webpay.py --dry-run --check-credentials`. Esta opción
+comprueba acceso y formato en memoria. La salida muestra el sistema de la EC2
+y el resultado de la comprobación.
+
 Durante el corte hay una interrupción breve. El script valida que el contenedor
 actual use la imagen fijada, el puerto 8087:8080, UID:GID 10001:10001, 640 MiB y
 `unless-stopped`. Crea un candidato con la configuración Docker y el entorno

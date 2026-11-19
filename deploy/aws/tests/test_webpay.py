@@ -117,6 +117,14 @@ class RolloutTests(unittest.TestCase):
         self.assertFalse(self.client.journal.exists())
         host.webpay_overrides.assert_not_called()
 
+    def test_credential_check_validates_without_printing_or_persisting_credentials(self):
+        self.client.status("ssm", True, check_credentials=True)
+        host.webpay_overrides.assert_called_once_with("ssm")
+        self.assertIn("lectura y formato verificados", self.output.getvalue())
+        self.assertNotIn(KEY, self.output.getvalue())
+        self.assertEqual(self.client.env_file.read_bytes(), ORIGINAL)
+        self.assertFalse(self.client.journal.exists())
+
     def test_apply_preserves_container_environment_and_original_file(self):
         self.client.apply("ssm")
         candidate = self.client.inspect(host.CONTAINER)
@@ -220,6 +228,11 @@ class AwsDispatchTests(unittest.TestCase):
         self.assertNotIn(KEY, repr(request))
         self.assertLess(max(map(len, commands)), 4096)
 
+    def test_credential_check_passes_only_the_read_only_switch_to_ssm(self):
+        request = webpay.ssm_request("dry-run", "ssm", check_credentials=True)
+        self.assertTrue(request["Parameters"]["commands"][-2].endswith("python3 - dry-run ssm --check-credentials"))
+        self.assertNotIn(KEY, repr(request))
+
     @unittest.skipUnless(os.name == "posix", "Requiere el shell POSIX de SSM")
     def test_payload_runs_through_a_posix_shell_and_passes_only_two_switches(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -252,14 +265,14 @@ class AwsDispatchTests(unittest.TestCase):
              patch.object(webpay, "run_host") as remote:
             with self.assertRaises(host.RolloutError):
                 webpay.execute("apply", "ssm", None)
-            remote.assert_called_once_with("apply", "ssm")
+            remote.assert_called_once_with("apply", "ssm", False)
 
     def test_status_reads_host_diary_even_when_target_cannot_be_found(self):
         with patch.object(webpay, "resolve_target", side_effect=host.RolloutError("absent")), \
              patch.object(webpay, "run_host") as remote:
             with self.assertRaises(host.RolloutError):
                 webpay.execute("status", "ssm", None)
-            remote.assert_called_once_with("status", "ssm")
+            remote.assert_called_once_with("status", "ssm", False)
 
     def test_ip_target_resolution_uses_registration_and_port(self):
         target = {"Target": {"Id": "172.31.11.205", "Port": 8087}}
