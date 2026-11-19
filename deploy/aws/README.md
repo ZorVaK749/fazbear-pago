@@ -80,6 +80,22 @@ stage, y `apigateway:PATCH` sobre el API para aplicar.
 `--verify` consulta los preflights de las cinco rutas del checkout y confirma
 401 en capacidad sin JWT. Esa comprobación evita crear pagos o pedidos.
 
+## Imagen de checkout en Fargate
+
+`frontend_image.py --dry-run --image <GHCR@sha256:...>` identifica el servicio
+activo de la familia `pedidos360-ev3-frontend-fg` y muestra la revisión actual.
+`--apply` registra una revisión que conserva los roles, la configuración de
+tarea y los contenedores existentes. Actualiza el servicio con el digest
+indicado, espera a ECS y comprueba el botón Webpay en el JavaScript público.
+`--verify` comprueba solamente el frontend público.
+
+El operador requiere `ecs:ListClusters`, `ecs:ListServices`,
+`ecs:DescribeServices`, `ecs:DescribeTaskDefinition`,
+`ecs:RegisterTaskDefinition` y `ecs:UpdateService`. Cuando corresponda,
+también requiere `iam:PassRole` para los roles actuales y `ecs:TagResource`
+para conservar etiquetas. La salida registra la revisión anterior para
+restaurarla desde ECS si el operador lo decide.
+
 ## Credenciales e IAM
 
 **Opción principal, Parameter Store.** El responsable del laboratorio carga
