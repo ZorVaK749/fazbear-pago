@@ -51,6 +51,8 @@ try {
     const { status, data } = await api('/api/productos', a);
     return status === 200 && Array.isArray(data) && data.length === 23 ? data : null;
   });
+  assert.ok(catalog.every(p => Number.isSafeInteger(Number(p.precio)) && Number(p.precio) > 0),
+    'Every catalog price must be a positive whole peso');
   const origin = 'https://p5gsy16utd.execute-api.us-east-1.amazonaws.com';
   for (const path of ['/api/orden/cotizaciones', '/api/pagos', '/api/fidelizacion/me/canjes']) {
     await eventually('CORS_' + path, async () => {
@@ -80,7 +82,8 @@ try {
     return response.data;
   };
   const operation = await quote(a, 'paid');
-  assert.equal(Number(operation.importe), Number((Number(product.precio) * quantity).toFixed(2)));
+  assert.equal(operation.moneda, 'CLP');
+  assert.equal(Number(operation.importe), Number(product.precio) * quantity);
   const invalid = await api('/api/orden/cotizaciones', a, 'POST', { items: [{ productoId: product.id, cantidad: 1, precioUnitario: 0.01 }], importe: 0.01 }, `${runId}-tampered`);
   assert.equal(invalid.status, 400, 'Client price fields must be rejected');
   passed('backend_quote_and_client_price_rejection');
@@ -94,6 +97,7 @@ try {
   const payKey = `${runId}-payment`;
   const paid = await api('/api/pagos', a, 'POST', paymentBody, payKey);
   assert.equal(paid.status, 201); assert.equal(paid.data.estado, 'APPROVED');
+  assert.equal(paid.data.moneda, 'CLP');
   assert.equal(Number(paid.data.importe), Number(operation.importe));
   const replay = await api('/api/pagos', a, 'POST', paymentBody, payKey);
   assert.equal(replay.status, 200); assert.equal(replay.data.pagoId, paid.data.pagoId);
@@ -139,10 +143,13 @@ try {
     const interaction = await api(`/api/productos/${selected.id}/interacciones`, a, 'POST', { tipo: i ? 'SELECT' : 'VIEW' });
     assert.ok([200, 201, 202, 204].includes(interaction.status));
   }
-  const add = await api(`/api/carrito/${alice}/items`, a, 'POST', { productoId: selected.id, nombreProducto: selected.nombre, cantidad: 1, precioUnitario: selected.precio });
+  const add = await api(`/api/carrito/${alice}/items`, a, 'POST', { productoId: selected.id, nombreProducto: selected.nombre, cantidad: 1, precioUnitario: 12.99 });
   assert.equal(add.status, 200);
   const cartItem = add.data.items.find(i => i.productoId === selected.id);
   assert.ok(cartItem);
+  assert.equal(cartItem.precioVigente, true);
+  assert.equal(Number(cartItem.precioUnitario), Number(selected.precio));
+  assert.equal(Number(add.data.total), Number(selected.precio));
   const update = await api(`/api/carrito/${alice}/items`, a, 'POST', { productoId: selected.id, nombreProducto: selected.nombre, cantidad: 1, precioUnitario: selected.precio });
   assert.equal(update.status, 200);
   assert.ok([200, 204].includes((await api(`/api/carrito/${alice}/items/${cartItem.id}`, a, 'DELETE')).status));

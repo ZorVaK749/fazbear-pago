@@ -151,6 +151,7 @@ services:
       CARRITO_DB_URL: jdbc:postgresql://postgres:5432/carrito
       CARRITO_DB_USER: ev3
       CARRITO_DB_PASSWORD: ${LOCAL_DB_PASSWORD}
+      PRODUCTOS_URL: http://productos:8080
       EV3_KAFKA_ENABLED: "true"
   orden:
     <<: *app
