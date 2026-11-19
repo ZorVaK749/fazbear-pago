@@ -5,6 +5,7 @@ on:
     paths:
       - '.github/workflows/ev3-integration.yml'
       - 'deploy/ev3-local/**'
+      - 'src/main/**'
   workflow_dispatch:
 permissions:
   contents: read

@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import jakarta.validation.Valid;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
@@ -16,11 +17,19 @@ import org.springframework.web.bind.annotation.*;
 public class PaymentController {
     private final PaymentService service;
     private final QuoteImportService quotes;
+    private final boolean webpayEnabled;
 
-    PaymentController(PaymentService service, QuoteImportService quotes) { this.service = service; this.quotes = quotes; }
+    PaymentController(PaymentService service, QuoteImportService quotes,
+                      @Value("${pago.webpay.enabled:false}") boolean webpayEnabled) {
+        this.service = service;
+        this.quotes = quotes;
+        this.webpayEnabled = webpayEnabled;
+    }
 
     @GetMapping("/health")
-    Map<String, String> health() { return Map.of("status", "UP", "mode", "SIMULATION_ONLY"); }
+    Map<String, String> health() {
+        return Map.of("status", "UP", "mode", webpayEnabled ? "SIMULATION_AND_WEBPAY_INTEGRATION" : "SIMULATION_ONLY");
+    }
 
     @PostMapping("/api/pagos")
     ResponseEntity<Payment> pay(@AuthenticationPrincipal Jwt jwt,
