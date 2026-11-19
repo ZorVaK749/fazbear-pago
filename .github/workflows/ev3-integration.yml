@@ -1,7 +1,7 @@
 name: EV3 integration with isolated synthetic data
 on:
   push:
-    branches: [ev3/integracion-integral]
+    branches: [ev3/integracion-integral, ev3/webpay-integracion]
     paths:
       - '.github/workflows/ev3-integration.yml'
       - 'deploy/ev3-local/**'
@@ -10,7 +10,7 @@ permissions:
   contents: read
 jobs:
   checkout-and-events:
-    if: github.ref == 'refs/heads/ev3/integracion-integral'
+    if: github.ref == 'refs/heads/ev3/integracion-integral' || github.ref == 'refs/heads/ev3/webpay-integracion'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     defaults:
@@ -27,16 +27,20 @@ jobs:
         shell: bash
         run: |
           checkout() {
-            git clone -q --depth 1 --branch ev3/integracion-integral \
+            git clone -q --depth 1 --branch "${3:-ev3/integracion-integral}" \
               "https://github.com/ZorVaK749/$1.git" "../$2-ev3-integral"
             printf '%s %s\n' "$1" "$(git -C "../$2-ev3-integral" rev-parse HEAD)"
           }
-          checkout fazbear-analytics-recommendations fazbear-analytics
+          if [[ "$GITHUB_REF_NAME" == 'ev3/webpay-integracion' ]]; then
+            checkout fazbear-analytics-recommendations fazbear-analytics ev3/analytics-extras
+          else
+            checkout fazbear-analytics-recommendations fazbear-analytics
+          fi
           checkout fazbear-fidelizacion fazbear-fidelizacion
           checkout fazbears-productos fazbear-productos
           checkout fazbear-carrito fazbear-carrito
-          checkout fazbear-orden fazbear-orden
-          checkout fazbears-pedidos fazbear-pedidos
+          checkout fazbear-orden fazbear-orden "$GITHUB_REF_NAME"
+          checkout fazbears-pedidos fazbear-pedidos "$GITHUB_REF_NAME"
       - name: Build and start disposable services
         run: |
           node deploy/ev3-local/init-env.mjs

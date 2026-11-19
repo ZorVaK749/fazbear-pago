@@ -33,7 +33,7 @@ class WebpayController {
 
     @PostMapping
     ResponseEntity<WebpayService.Redirect> start(@AuthenticationPrincipal Jwt jwt,
-            @RequestHeader("Idempotency-Key") String key, @Valid @RequestBody Start body) {
+            @RequestHeader(value = "Idempotency-Key", required = false) String key, @Valid @RequestBody Start body) {
         Owner owner = Owner.from(jwt);
         quotes.ensure(owner, body.operacionId(), "Bearer " + jwt.getTokenValue());
         return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(service.start(owner, body.operacionId(), key));

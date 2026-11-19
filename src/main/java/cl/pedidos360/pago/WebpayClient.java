@@ -6,6 +6,7 @@ import java.net.URI;
 import java.math.BigDecimal;
 import java.util.Map;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
@@ -20,6 +21,7 @@ class WebpayClient {
     private final RestClient provider;
     private final String returnUrl;
 
+    @Autowired
     WebpayClient(@Value("${pago.webpay.commerce-code:}") String commerceCode,
                  @Value("${pago.webpay.api-key:}") String key,
                  @Value("${pago.webpay.return-url:}") URI returnUrl) {
@@ -38,6 +40,11 @@ class WebpayClient {
                 .defaultHeader("Tbk-Api-Key-Secret", key).build();
     }
 
+    WebpayClient(RestClient provider, String returnUrl) {
+        this.provider = provider;
+        this.returnUrl = returnUrl;
+    }
+
     Created create(String order, String session, int amount) {
         return provider.post().uri(TRANSACTIONS).body(Map.of(
                 "buy_order", order, "session_id", session, "amount", amount, "return_url", returnUrl))
@@ -53,7 +60,9 @@ class WebpayClient {
     }
 
     @JsonIgnoreProperties(ignoreUnknown = true)
-    record Created(String token, String url) {}
+    record Created(String token, String url) {
+        @Override public String toString() { return "Webpay transaction created"; }
+    }
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     record Outcome(String status, BigDecimal amount, @JsonProperty("buy_order") String order,
