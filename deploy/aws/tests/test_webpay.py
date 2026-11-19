@@ -350,9 +350,18 @@ class CredentialProvisionTests(unittest.TestCase):
     def test_aws_cli_accepts_securestring_json_from_stdin_without_an_api_call(self):
         payload = {"Name": host.PARAMETERS["WEBPAY_API_KEY"], "Value": KEY,
                    "Type": "SecureString", "Tier": "Standard", "Overwrite": False}
-        result = webpay.aws("ssm", "put-parameter", "--cli-input-json", "file:///dev/stdin",
-                            "--generate-cli-skeleton", "output", input_json=payload)
-        self.assertIn("Version", result)
+        env = {"AWS_EC2_METADATA_DISABLED": "true", "AWS_CONFIG_FILE": "/dev/null",
+               "AWS_SHARED_CREDENTIALS_FILE": "/dev/null", "AWS_ACCESS_KEY_ID": "fixture",
+               "AWS_SECRET_ACCESS_KEY": "fixture"}
+        with patch.dict(os.environ, env):
+            cli = subprocess.run(
+                ["aws", "--region", webpay.REGION, "--no-cli-pager", "--endpoint-url",
+                 "http://127.0.0.1:1", "ssm", "put-parameter", "--cli-input-json", "file:///dev/stdin",
+                 "--generate-cli-skeleton", "output"],
+                input=json.dumps(payload).encode(), capture_output=True, timeout=15,
+            )
+        self.assertEqual(cli.returncode, 0, cli.stderr.decode(errors="replace").replace(KEY, "[redacted]"))
+        self.assertIn("Version", json.loads(cli.stdout))
 
     def test_creates_only_fixed_securestrings_and_never_prints_secret_values(self):
         output = io.StringIO()
