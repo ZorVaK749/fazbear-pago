@@ -213,6 +213,19 @@ Requiere `ssm:SendCommand` con `AWS-RunShellScript` sobre cada EC2 y
 `ssm:ListCommandInvocations` y `ssm:GetCommandInvocation`. La EC2 debe estar
 administrada por SSM. No se imprimen credenciales ni rutas de conexión.
 
+Si el inventario confirma H2 montado en archivo, preparar la copia sin detener
+el servicio.
+
+```bash
+python3 deploy/aws/clp_productos.py --prepare
+```
+
+La preparación comprueba que el archivo mantuvo el mismo SHA256 durante la
+copia y abre una copia de comprobación con el driver H2 de la imagen activa.
+Guarda el resultado en `/var/lib/pedidos360-clp-productos` con permisos privados.
+El corte usa un respaldo en frío para incluir cualquier cambio posterior de
+stock. `--status` muestra la fase y el nombre de la copia preliminar.
+
 ## Orden del cambio
 
 1. Pausar nuevas compras y cambios en el catálogo durante la ventana. Dejar
