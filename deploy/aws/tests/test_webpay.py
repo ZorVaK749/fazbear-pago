@@ -179,6 +179,13 @@ class RolloutTests(unittest.TestCase):
             self.client.rollback()
         self.assertNotIn(("stop", "-t", "20", "new"), self.client.calls)
 
+    def test_rollback_never_guesses_an_overridden_datasource(self):
+        self.client.apply("ssm")
+        self.client.containers["new"]["Config"]["Env"].append("SPRING_DATASOURCE_JNDI_NAME=db/other")
+        with self.assertRaisesRegex(host.RolloutError, "verificación manual"):
+            self.client.rollback()
+        self.assertNotIn(("stop", "-t", "20", "new"), self.client.calls)
+
 
 class AwsDispatchTests(unittest.TestCase):
     def test_payload_contains_reviewed_source_and_switches_only(self):

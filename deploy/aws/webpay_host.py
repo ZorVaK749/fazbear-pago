@@ -333,12 +333,13 @@ class Host:
 
     def restore_previous(self, state):
         previous = self.inspect(state["previous"])
+        candidate = self.find(state["candidate"] or self.candidate_name(state))
+        if candidate and candidate["State"]["Running"]:
+            raise RolloutError("El candidato sigue activo. No se iniciará Pago anterior.")
         active_name = self.find(CONTAINER)
         if active_name and active_name["Id"] != previous["Id"]:
             if active_name["Id"] != state["candidate"]:
                 raise RolloutError("El nombre activo pertenece a un contenedor ajeno al diario.")
-            if active_name["State"]["Running"]:
-                raise RolloutError("El candidato sigue activo. No se iniciará Pago anterior.")
             self.docker("rename", active_name["Id"], self.candidate_name(state))
         if previous["Name"] != "/" + CONTAINER:
             self.docker("rename", previous["Id"], CONTAINER)
@@ -392,8 +393,8 @@ class Host:
 
     def database_used(self, env):
         result = run(["psql", "-X", "-w", "-qAt", "-v", "ON_ERROR_STOP=1", "-c",
-                      "SELECT EXISTS (SELECT 1 FROM public.webpay_transaction) OR "
-                      "EXISTS (SELECT 1 FROM public.payment WHERE NOT simulation);"],
+                      "SELECT EXISTS (SELECT 1 FROM webpay_transaction) OR "
+                      "EXISTS (SELECT 1 FROM payment WHERE NOT simulation);"],
                      "No se pudo confirmar el estado de Webpay en PostgreSQL.", env=env, timeout=12).strip()
         if result not in {b"t", b"f"}:
             raise RolloutError("Respuesta de PostgreSQL inconclusa.")
@@ -402,10 +403,11 @@ class Host:
 
 def postgres_env(lines):
     values = env_values(lines)
+    supported = {"SPRING_DATASOURCE_URL", "SPRING_DATASOURCE_USERNAME", "SPRING_DATASOURCE_PASSWORD"}
     # Do not guess a database if other mechanisms can override the datasource.
     if values.get("SPRING_PROFILES_ACTIVE") != "ev3-aws" or any(
-            value and key.startswith(("SPRING_APPLICATION_JSON", "SPRING_CONFIG_", "JAVA_TOOL_OPTIONS",
-                                      "JDK_JAVA_OPTIONS", "_JAVA_OPTIONS", "SPRING_DATASOURCE_HIKARI_"))
+            value and key not in supported and key.startswith(("SPRING_APPLICATION_JSON", "SPRING_CONFIG_",
+                "JAVA_TOOL_OPTIONS", "JDK_JAVA_OPTIONS", "_JAVA_OPTIONS", "SPRING_DATASOURCE_"))
             for key, value in values.items()):
         raise RolloutError("La configuración PostgreSQL requiere verificación manual.")
     jdbc = values.get("SPRING_DATASOURCE_URL", values.get("PAGO_DB_URL", ""))

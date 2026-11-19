@@ -110,7 +110,7 @@ python3 deploy/aws/webpay.py --rollback
   y confirmar que esta EC2 es el único escritor de Webpay para el RDS.
   El script necesita `psql` en la EC2 y usa el datasource del contenedor.
   Detiene el candidato, ejecuta una consulta de solo lectura sobre
-  `public.webpay_transaction` y `public.payment`, y restaura el anterior
+  `webpay_transaction` y `payment` con el usuario y search path del servicio, y restaura el anterior
   únicamente si la consulta demuestra la ausencia de transacciones Webpay.
   Ante registros o una consulta inconclusa, vuelve a iniciar el candidato.
   Con datos históricos o una configuración PostgreSQL personalizada, conservar
