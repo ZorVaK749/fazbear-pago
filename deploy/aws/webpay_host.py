@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import shutil
 import socket
 import stat
@@ -446,12 +447,34 @@ class Host:
 def postgres_env(lines):
     values = env_values(lines)
     supported = {"SPRING_DATASOURCE_URL", "SPRING_DATASOURCE_USERNAME", "SPRING_DATASOURCE_PASSWORD"}
+    java_variables = {"JAVA_TOOL_OPTIONS", "JDK_JAVA_OPTIONS", "_JAVA_OPTIONS"}
+    pool_sizes = {"MAXIMUM_POOL_SIZE", "MINIMUM_IDLE", "CONNECTION_TIMEOUT",
+                  "VALIDATION_TIMEOUT", "IDLE_TIMEOUT", "MAX_LIFETIME", "KEEPALIVE_TIME"}
     # Do not guess a database if other mechanisms can override the datasource.
-    if values.get("SPRING_PROFILES_ACTIVE") != "ev3-aws" or any(
-            value and key not in supported and key.startswith(("SPRING_APPLICATION_JSON", "SPRING_CONFIG_",
-                "JAVA_TOOL_OPTIONS", "JDK_JAVA_OPTIONS", "_JAVA_OPTIONS", "SPRING_DATASOURCE_"))
-            for key, value in values.items()):
-        raise RolloutError("La configuración PostgreSQL requiere verificación manual.")
+    blockers = []
+    if values.get("SPRING_PROFILES_ACTIVE") != "ev3-aws":
+        blockers.append("SPRING_PROFILES_ACTIVE")
+    for key, value in values.items():
+        if not value or key in supported:
+            continue
+        normalized = re.sub(r"[.-]", "_", key).upper()
+        if normalized != key and (normalized in java_variables | {"SPRING_PROFILES_ACTIVE", "SPRING_APPLICATION_JSON"}
+                                  or normalized.startswith(("SPRING_CONFIG_", "SPRING_DATASOURCE_"))):
+            blockers.append(normalized if re.fullmatch(r"[A-Z0-9_]{1,100}", normalized) else "variable no estándar")
+            continue
+        if key in java_variables:
+            if not datasource_neutral_java_options(value):
+                blockers.append(key)
+        elif key == "SPRING_DATASOURCE_DRIVER_CLASS_NAME" and value == "org.postgresql.Driver":
+            continue
+        elif (key.startswith("SPRING_DATASOURCE_HIKARI_")
+              and key[len("SPRING_DATASOURCE_HIKARI_"):] in pool_sizes and re.fullmatch(r"[0-9]+", value)):
+            continue
+        elif key == "SPRING_APPLICATION_JSON" or key.startswith(("SPRING_CONFIG_", "SPRING_DATASOURCE_")):
+            blockers.append(key if re.fullmatch(r"[A-Z0-9_]{1,100}", key) else "variable no estándar")
+    if blockers:
+        raise RolloutError("La configuración PostgreSQL requiere verificación manual por: "
+                           + ", ".join(sorted(set(blockers))) + ".")
     jdbc = values.get("SPRING_DATASOURCE_URL", values.get("PAGO_DB_URL", ""))
     if not jdbc.startswith("jdbc:postgresql://"):
         raise RolloutError("Se requiere una URL PostgreSQL inequívoca para el rollback.")
@@ -472,6 +495,24 @@ def postgres_env(lines):
                PGPASSWORD=password, PGSSLMODE=sslmode[0], PGCONNECT_TIMEOUT="5",
                PGOPTIONS="-c default_transaction_read_only=on -c statement_timeout=5000")
     return env
+
+
+def datasource_neutral_java_options(value):
+    try:
+        options = shlex.split(value)
+    except ValueError:
+        return False
+    memory_flag = re.compile(
+        r"-X(?:ms|mx|ss)[0-9]+[kKmMgG]?|"
+        r"-XX:(?:InitialRAMPercentage|MinRAMPercentage|MaxRAMPercentage)=[0-9]+(?:\.[0-9]+)?|"
+        r"-XX:ActiveProcessorCount=[0-9]+"
+    )
+    runtime_flags = {
+        "-XX:+UseContainerSupport", "-XX:+UseSerialGC", "-XX:+UseG1GC",
+        "-XX:+ExitOnOutOfMemoryError", "-Dfile.encoding=UTF-8", "-Djava.awt.headless=true",
+    }
+    return all(memory_flag.fullmatch(option) or option in runtime_flags
+               or re.fullmatch(r"-Duser.timezone=[A-Za-z0-9_+/-]+", option) for option in options)
 
 
 def main():

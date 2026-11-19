@@ -37,6 +37,8 @@ y el resultado de la comprobación.
 En Amazon Linux 2023, `python3 deploy/aws/webpay.py --prepare-rollback`
 instala el cliente `postgresql15` si falta y ensaya la consulta de solo lectura
 contra RDS con el datasource de Pago. El contenedor continúa en ejecución.
+El diagnóstico de un datasource ambiguo devuelve solo los nombres de variables.
+Los límites conocidos de memoria de JVM y tamaño de pool se conservan en Pago.
 
 Durante el corte hay una interrupción breve. El script valida que el contenedor
 actual use la imagen fijada, el puerto 8087:8080, UID:GID 10001:10001, 640 MiB y

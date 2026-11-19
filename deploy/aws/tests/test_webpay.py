@@ -209,9 +209,27 @@ class RolloutTests(unittest.TestCase):
     def test_rollback_never_guesses_an_overridden_datasource(self):
         self.client.apply("ssm")
         self.client.containers["new"]["Config"]["Env"].append("SPRING_DATASOURCE_JNDI_NAME=db/other")
-        with self.assertRaisesRegex(host.RolloutError, "verificación manual"):
+        with self.assertRaisesRegex(host.RolloutError, "SPRING_DATASOURCE_JNDI_NAME"):
             self.client.rollback()
         self.assertNotIn(("stop", "-t", "20", "new"), self.client.calls)
+
+    def test_prepare_rollback_accepts_memory_and_pool_limits_proven_not_to_change_the_datasource(self):
+        self.client.containers["old"]["Config"]["Env"].extend([
+            "JAVA_TOOL_OPTIONS=-Xms128m -Xmx320m -XX:MaxRAMPercentage=65.0 -XX:+UseSerialGC",
+            "SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE=6",
+            "SPRING_DATASOURCE_DRIVER_CLASS_NAME=org.postgresql.Driver",
+        ])
+        with patch.object(self.client, "database_used", return_value=False) as check:
+            self.client.prepare_rollback()
+        self.assertEqual(check.call_args.args[0]["PGDATABASE"], "payment")
+
+    def test_datasource_override_in_jvm_is_rejected_without_printing_value(self):
+        private_value = "jdbc:postgresql://private.example.test/other"
+        self.client.containers["old"]["Config"]["Env"].append(
+            "JAVA_TOOL_OPTIONS=-Xmx320m -Dspring.datasource.url=" + private_value)
+        with self.assertRaisesRegex(host.RolloutError, "JAVA_TOOL_OPTIONS") as blocked:
+            self.client.prepare_rollback()
+        self.assertNotIn(private_value, str(blocked.exception))
 
 
 class AwsDispatchTests(unittest.TestCase):
