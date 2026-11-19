@@ -7,6 +7,9 @@ on:
     paths-ignore:
       - 'docs/**'
       - 'deploy/ev3-local/**'
+      - 'deploy/aws/**'
+      - '.github/workflows/aws-webpay-scripts.yml'
+      - '.github/workflows/ghcr-versioned.yml'
       - '.github/workflows/ev3-integration.yml'
   workflow_dispatch:
     inputs:

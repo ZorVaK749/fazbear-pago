@@ -1,0 +1,18 @@
+name: Verify Webpay deployment scripts
+on:
+  push:
+    branches: [ev3/webpay-integracion]
+    paths: ['deploy/aws/**', '.github/workflows/aws-webpay-scripts.yml']
+  pull_request:
+    paths: ['deploy/aws/**', '.github/workflows/aws-webpay-scripts.yml']
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python3 -B -m unittest discover -s deploy/aws/tests -v

@@ -33,6 +33,9 @@ aprobación desde el navegador queda pendiente del corte en AWS.
 
 ## Webpay Plus de integración
 
+La activación de la imagen ya instalada en la EC2 de Pago se puede hacer con
+el [comando SSM y el procedimiento de recuperación](../deploy/aws/README.md).
+
 Pago conserva el endpoint simulado y su regla antifraude. La modalidad Webpay
 usa la API REST oficial Webpay Plus v1.2 en `webpay3gint.transbank.cl`.
 La regla de cuatro intentos en diez segundos se verifica con los instrumentos
