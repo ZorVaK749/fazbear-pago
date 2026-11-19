@@ -27,6 +27,7 @@ class WebpayClientTest {
                     {"token":"sandbox-reference-for-test","url":"https://webpay3gint.transbank.cl/webpayserver/initTransaction"}
                     """, MediaType.APPLICATION_JSON));
         mock.expect(requestTo(path + "/" + token)).andExpect(method(HttpMethod.PUT))
+                .andExpect(header("Content-Type", "application/json"))
                 .andRespond(withSuccess("""
                     {"status":"AUTHORIZED","amount":12990,"buy_order":"order-1","session_id":"session-1",
                      "response_code":0,"card_detail":{"card_number":"0000"}}

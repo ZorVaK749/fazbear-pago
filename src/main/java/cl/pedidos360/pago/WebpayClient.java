@@ -8,6 +8,7 @@ import java.util.Map;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.http.MediaType;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
@@ -52,7 +53,8 @@ class WebpayClient {
     }
 
     Outcome commit(String token) {
-        return provider.put().uri(TRANSACTIONS + "/{token}", token).retrieve().body(Outcome.class);
+        return provider.put().uri(TRANSACTIONS + "/{token}", token).contentType(MediaType.APPLICATION_JSON)
+                .retrieve().body(Outcome.class);
     }
 
     Outcome status(String token) {
