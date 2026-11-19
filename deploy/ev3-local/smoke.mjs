@@ -164,11 +164,32 @@ try {
   for (let i = 1; i <= 4; i++) {
     const jwt = i % 2 ? a : b;
     const q = await quote(jwt, `fraud-${i}`, 1, fraudProduct);
-    const result = await api('/api/pagos', jwt, 'POST', { operacionId: q.operacionId, metodo: 'SIMULADO', instrumentoPruebaId: 'sim-declined' }, `${runId}-fraud-${i}`);
+    const request = { operacionId: q.operacionId, metodo: 'SIMULADO', instrumentoPruebaId: 'sim-declined' };
+    const key = `${runId}-fraud-${i}`;
+    const result = await api('/api/pagos', jwt, 'POST', request, key);
     assert.equal(result.status, i === 4 ? 429 : 201);
     assert.equal(result.data.estado, i === 4 ? 'BLOCKED' : 'DECLINED');
+    if (i === 4) {
+      const repeat = await api('/api/pagos', b, 'POST', request, key);
+      assert.equal(repeat.status, 429);
+      assert.equal(repeat.replay, 'true');
+      assert.equal(repeat.data.pagoId, result.data.pagoId);
+      const attempts = await api(`/api/pagos/${result.data.pagoId}/intentos`, b);
+      assert.equal(attempts.status, 200);
+      assert.equal(attempts.data.length, 1);
+      assert.equal(attempts.data[0].blocked, true);
+      assert.equal(Number(attempts.data[0].attempts_in_window), 4);
+      const ownAlerts = await api('/api/pagos/me/alertas', b);
+      const otherAlerts = await api('/api/pagos/me/alertas', a);
+      assert.equal(ownAlerts.status, 200);
+      assert.equal(otherAlerts.status, 200);
+      const matchesPayment = alert => alert.payment_id === result.data.pagoId;
+      assert.equal(ownAlerts.data.filter(matchesPayment).length, 1);
+      assert.equal(ownAlerts.data.find(matchesPayment).rule, 'MORE_THAN_3_IN_10_SECONDS');
+      assert.equal(otherAlerts.data.some(matchesPayment), false);
+    }
   }
-  passed('fourth_attempt_cross_user_fraud');
+  passed('fourth_attempt_cross_user_fraud_with_single_owner_scoped_alert');
 
   const refunded = await api(`/api/pagos/${paid.data.pagoId}/anulacion`, a, 'POST', undefined, `${runId}-refund`);
   assert.equal(refunded.status, 200);
