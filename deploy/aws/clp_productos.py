@@ -30,19 +30,24 @@ sys.exit(module.main(sys.argv[1:]))
 def request(mode, address="127.0.0.1"):
     if mode not in MODES:
         raise ValueError("Modo de Productos no admitido")
-    source = Path(__file__).parent
     address = str(IPv4Address(address))
-    scripts = [(name, (source / (name + ".py")).read_text(encoding="utf-8")) for name in MODULES]
+    return python_request(INSTANCE, f"Pedidos360 Productos CLP {mode}", MODULES, (mode, address),
+                          540 if mode == "apply" else 180)
+
+
+def python_request(instance, comment, modules, arguments, timeout):
+    source = Path(__file__).parent
+    scripts = [(name, (source / (name + ".py")).read_text(encoding="utf-8")) for name in modules]
     bundle = base64.b64encode(gzip.compress(json.dumps(scripts).encode(), mtime=0)).decode()
     commands = ["exec bash -s <<'PEDIDOS360_CLP'", "set -euo pipefail", "umask 077", "{"]
     commands.extend(f"printf %s '{bundle[i:i + 2000]}'" for i in range(0, len(bundle), 2000))
-    commands += [f"}} | base64 -d | python3 -c {shlex.quote(LOADER)} {mode} {address}", "PEDIDOS360_CLP"]
+    commands += [f"}} | base64 -d | python3 -c {shlex.quote(LOADER)} {shlex.join(arguments)}", "PEDIDOS360_CLP"]
     return {
         "DocumentName": "AWS-RunShellScript",
-        "InstanceIds": [INSTANCE],
-        "Comment": f"Pedidos360 Productos CLP {mode}",
+        "InstanceIds": [instance],
+        "Comment": comment,
         "TimeoutSeconds": 90,
-        "Parameters": {"commands": commands, "executionTimeout": ["540" if mode == "apply" else "180"]},
+        "Parameters": {"commands": commands, "executionTimeout": [str(timeout)]},
     }
 
 

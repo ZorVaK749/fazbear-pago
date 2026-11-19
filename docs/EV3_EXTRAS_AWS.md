@@ -196,9 +196,9 @@ y su stock se protegen con el procedimiento de la guía base.
 | Frontend | [44587395754](https://github.com/ZorVaK749/fazbears-frontend/actions/runs/44587395754) | `ghcr.io/zorvak749/fazbears-frontend@sha256:010cd44c011df91d13101b5f7be744861324161ca0803d760191f5ce1de53606` |
 
 - [x] Publicar las cinco imágenes y verificar los digests en GHCR.
-- [ ] Confirmar el datasource vivo de Productos con el inventario SSM.
-- [ ] Obtener y restaurar en aislamiento un respaldo verificable de los 23 productos.
-- [ ] Aplicar el cambio de precios en una ventana de despliegue y comprobar IDs, stock y salud.
+- [x] Confirmar H2 montado en Productos con el inventario SSM.
+- [x] Abrir y verificar los respaldos de los 23 productos con el driver de H2 de la imagen activa.
+- [x] Aplicar los precios CLP en una copia, comprobar IDs y stock, y confirmar el Target Group healthy.
 - [ ] Actualizar Carrito, Orden, Notificaciones y Frontend por digest.
 - [ ] Validar carrito guardado, nueva cotización y pago Webpay en el entorno de integración.
 
@@ -207,12 +207,22 @@ el despliegue están en la [guía de CLP](../deploy/aws/README.md#cambio-de-cat�
 La [prueba integrada de CLP](https://github.com/ZorVaK749/fazbear-pago/actions/runs/44588570206)
 usa un catálogo y pagos sintéticos en GitHub Actions.
 
-Una vez verificados los nuevos precios y el stock en Productos y los demás
-servicios del backend, actualizar Fargate desde CloudShell.
+Con Productos verificado y las compras pausadas, actualizar los tres backends
+restantes y Fargate desde CloudShell. El comando de backends comprueba todos
+los servicios antes de iniciar el primer corte.
 
 ```bash
 cd "$HOME/pedidos360-ops-pago" &&
 git pull --ff-only origin ev3/webpay-integracion &&
+python3 deploy/aws/clp_backends.py --apply &&
 python3 deploy/aws/frontend_image.py --apply --image \
   ghcr.io/zorvak749/fazbears-frontend@sha256:010cd44c011df91d13101b5f7be744861324161ca0803d760191f5ce1de53606
 ```
+
+El script conserva la red, los montajes y la configuración de los
+contenedores existentes. Configura `PRODUCTOS_URL` para que Carrito consulte
+la IP privada actual de Productos. `--dry-run` adelanta el inventario;
+`--status --service carrito` muestra el diario del servicio indicado.
+`--verify --service carrito` comprueba una activación pendiente sin
+reiniciar el contenedor. `--recover --service carrito` recupera un corte
+interrumpido antes de iniciar el candidato.
