@@ -9,7 +9,7 @@ GitHub Actions valida y publica candidatos por digest. El equipo opera AWS.
 
 | Servicio | Commit | GitHub Actions | Imagen para `docker pull` |
 | --- | --- | --- | --- |
-| Pago | `12b3b4c` | [44432491530](https://github.com/ZorVaK749/fazbear-pago/actions/runs/44432491530) | `ghcr.io/zorvak749/fazbear-pago@sha256:daa2e6d260be38c0e48a1ea5847f6b784149ed5c87207e191ee5931f799c1b3f` |
+| Pago | `8592218` | [44433036627](https://github.com/ZorVaK749/fazbear-pago/actions/runs/44433036627) | `ghcr.io/zorvak749/fazbear-pago@sha256:2e93d9d7b905480c1704bbc31644ba3e2e67410fd1fe0da6ca8c54ac49c61c12` |
 | Orden | `5d9de82` | [44432122848](https://github.com/ZorVaK749/fazbear-orden/actions/runs/44432122848) | `ghcr.io/zorvak749/fazbear-orden@sha256:201f125eb4090476ee5217aa26e06fe6de739c703cc229b80a3c84ae0b7dd875` |
 | Pedidos | `579fe35` | [44431117247](https://github.com/ZorVaK749/fazbears-pedidos/actions/runs/44431117247) | `ghcr.io/zorvak749/fazbears-pedidos@sha256:e425eb1c1bda1f078e478a146eb94eb2aa478227bac888e280240201e9f00281` |
 | Angular | `d4cd3f1` | [44432242966](https://github.com/ZorVaK749/fazbears-frontend/actions/runs/44432242966) | `ghcr.io/zorvak749/fazbears-frontend@sha256:3a9f0f7cbc096712e24b264b7f4b0821db12f275d5ad94f7eb05ffec125528c5` |
@@ -21,12 +21,15 @@ Carrito, Productos, Notificaciones, Reportes y Fidelización conservan sus
 La [fase obligatoria](https://github.com/ZorVaK749/fazbear-pago/actions/runs/44430271344)
 verificó el cuarto intento bloqueado, la alerta única, su aislamiento por
 usuario y el flujo completo de pago simulado, pedido, Kafka y FazCoins.
-El [smoke de las ramas nuevas](https://github.com/ZorVaK749/fazbear-pago/actions/runs/44432491662)
+El [smoke de las ramas nuevas](https://github.com/ZorVaK749/fazbear-pago/actions/runs/44433036533)
 cubre la compatibilidad de ese flujo con los extras desactivados.
 Los casos de Webpay usan un proveedor de prueba controlado. Analytics ejercita
 Kafka y un WebSocket real en CI, con DynamoDB sustituido por un cliente de
 prueba. Su suite reportó 45 pruebas ejecutadas y una omitida. Angular pasó
 11 archivos de pruebas, incluidos el retorno Webpay y la reconexión.
+Una prueba directa de creación y consulta en el sandbox oficial devolvió
+`INITIALIZED` con el monto, orden y sesión esperados. El recorrido de
+aprobación desde el navegador queda pendiente del corte en AWS.
 
 ## Webpay Plus de integración
 
