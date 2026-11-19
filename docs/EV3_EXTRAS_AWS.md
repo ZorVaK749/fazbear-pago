@@ -5,10 +5,36 @@ como referencia de rollback. Las ramas de trabajo son `ev3/webpay-integracion`
 en Pago, Orden, Pedidos y Angular, y `ev3/analytics-extras` en Analytics.
 GitHub Actions valida y publica candidatos por digest. El equipo opera AWS.
 
+## Imágenes verificadas en GHCR
+
+| Servicio | Commit | GitHub Actions | Imagen para `docker pull` |
+| --- | --- | --- | --- |
+| Pago | `12b3b4c` | [44432491530](https://github.com/ZorVaK749/fazbear-pago/actions/runs/44432491530) | `ghcr.io/zorvak749/fazbear-pago@sha256:daa2e6d260be38c0e48a1ea5847f6b784149ed5c87207e191ee5931f799c1b3f` |
+| Orden | `5d9de82` | [44432122848](https://github.com/ZorVaK749/fazbear-orden/actions/runs/44432122848) | `ghcr.io/zorvak749/fazbear-orden@sha256:201f125eb4090476ee5217aa26e06fe6de739c703cc229b80a3c84ae0b7dd875` |
+| Pedidos | `579fe35` | [44431117247](https://github.com/ZorVaK749/fazbears-pedidos/actions/runs/44431117247) | `ghcr.io/zorvak749/fazbears-pedidos@sha256:e425eb1c1bda1f078e478a146eb94eb2aa478227bac888e280240201e9f00281` |
+| Angular | `d4cd3f1` | [44432242966](https://github.com/ZorVaK749/fazbears-frontend/actions/runs/44432242966) | `ghcr.io/zorvak749/fazbears-frontend@sha256:3a9f0f7cbc096712e24b264b7f4b0821db12f275d5ad94f7eb05ffec125528c5` |
+| Analytics | `695de7e` | [44431691251](https://github.com/ZorVaK749/fazbear-analytics-recommendations/actions/runs/44431691251) | `ghcr.io/zorvak749/fazbear-analytics-recommendations@sha256:3d6a8cd2454a1a6af597b28f845bf87d089e0ec87430839c463422354529d87e` |
+
+Carrito, Productos, Notificaciones, Reportes y Fidelización conservan sus
+[digests de la entrega base](IMAGENES_EV3_2026-11-18.md).
+
+La [fase obligatoria](https://github.com/ZorVaK749/fazbear-pago/actions/runs/44430271344)
+verificó el cuarto intento bloqueado, la alerta única, su aislamiento por
+usuario y el flujo completo de pago simulado, pedido, Kafka y FazCoins.
+El [smoke de las ramas nuevas](https://github.com/ZorVaK749/fazbear-pago/actions/runs/44432491662)
+cubre la compatibilidad de ese flujo con los extras desactivados.
+Los casos de Webpay usan un proveedor de prueba controlado. Analytics ejercita
+Kafka y un WebSocket real en CI, con DynamoDB sustituido por un cliente de
+prueba. Su suite reportó 45 pruebas ejecutadas y una omitida. Angular pasó
+11 archivos de pruebas, incluidos el retorno Webpay y la reconexión.
+
 ## Webpay Plus de integración
 
 Pago conserva el endpoint simulado y su regla antifraude. La modalidad Webpay
 usa la API REST oficial Webpay Plus v1.2 en `webpay3gint.transbank.cl`.
+La regla de cuatro intentos en diez segundos se verifica con los instrumentos
+simulados. El flujo Webpay no recibe un identificador estable de tarjeta antes
+de autorizar, así que no aplica esa regla a partir de datos parciales de la tarjeta.
 El monto sale de la cotización de Orden en CLP y debe ser entero. Angular
 envía el token por formulario al dominio de integración de Transbank. El
 backend verifica monto, orden de compra, sesión, estado `AUTHORIZED` y código
@@ -95,6 +121,20 @@ entregas pendientes ante fallos y reconoce como entregado un evento ya presente.
 aws dynamodb describe-table --region "$AWS_REGION" --table-name "$ANALYTICS_DYNAMODB_TABLE" \
   --query 'Table.[TableStatus,KeySchema]'
 aws dynamodb describe-time-to-live --region "$AWS_REGION" --table-name "$ANALYTICS_DYNAMODB_TABLE"
+```
+
+Política de escritura para el rol de Analytics. Sustituir región, cuenta y
+tabla por el ARN confirmado del recurso aprobado.
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Action": "dynamodb:PutItem",
+    "Resource": "arn:aws:dynamodb:REGION:ACCOUNT_ID:table/TABLE_NAME"
+  }]
+}
 ```
 
 ## Actualización controlada en AWS
