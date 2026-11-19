@@ -3,9 +3,11 @@
 
 import argparse
 import base64
+from contextlib import contextmanager
 import getpass
 import gzip
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -23,14 +25,29 @@ HOST_SCRIPT = Path(__file__).with_name("webpay_host.py")
 TARGET_ARN = re.compile(r"arn:aws:elasticloadbalancing:us-east-1:[0-9]{12}:targetgroup/[A-Za-z0-9-]+/[a-f0-9]+")
 
 
+@contextmanager
+def cli_arguments(args, input_json):
+    if input_json is None:
+        yield args, ()
+        return
+    # AWS CLI can read the parameter source more than once. An anonymous
+    # seekable Linux file allows that without writing credentials to disk.
+    with os.fdopen(os.memfd_create("pedidos360-webpay"), "w+b") as data:
+        data.write(json.dumps(input_json).encode())
+        data.flush()
+        data.seek(0)
+        fd = data.fileno()
+        yield (*args, "--cli-input-json", f"file:///proc/self/fd/{fd}"), (fd,)
+
+
 def aws(*args, input_json=None):
     failure = f"Falló AWS CLI para {args[0]} {args[1]}. Revise región, credenciales e IAM."
     try:
-        response = subprocess.run(
-            ["aws", "--region", REGION, "--no-cli-pager", "--output", "json", *args],
-            capture_output=True, check=True, timeout=30,
-            input=None if input_json is None else json.dumps(input_json).encode(),
-        )
+        with cli_arguments(args, input_json) as (arguments, fds):
+            response = subprocess.run(
+                ["aws", "--region", REGION, "--no-cli-pager", "--output", "json", *arguments],
+                capture_output=True, check=True, timeout=30, pass_fds=fds,
+            )
         return json.loads(response.stdout)
     except subprocess.CalledProcessError as error:
         if args[:2] == ("ssm", "put-parameter"):
@@ -45,7 +62,7 @@ def aws(*args, input_json=None):
 
 
 def create_parameters():
-    if sys.platform != "linux" or not sys.stdin.isatty():
+    if not hasattr(os, "memfd_create") or not sys.stdin.isatty():
         raise RolloutError("Use una sesión interactiva de CloudShell para ingresar las credenciales con eco desactivado.")
     try:
         with warnings.catch_warnings():
@@ -56,7 +73,7 @@ def create_parameters():
         raise RolloutError("No se pudo leer desde una terminal con eco desactivado.") from None
     code, key = validate_credentials(code, key)
     for name, value in zip(PARAMETERS.values(), (code, key)):
-        response = aws("ssm", "put-parameter", "--cli-input-json", "file:///dev/stdin", input_json={
+        response = aws("ssm", "put-parameter", input_json={
             "Name": name, "Value": value, "Type": "SecureString", "Tier": "Standard", "Overwrite": False,
         })
         result = "ya existía y se conservó" if response.get("AlreadyExists") else "creado"

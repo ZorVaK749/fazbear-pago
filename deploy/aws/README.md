@@ -67,7 +67,8 @@ de la [referencia oficial de Transbank](https://github.com/TransbankDevelopers/t
 
 Desde una sesión interactiva de CloudShell, ejecutar
 `python3 deploy/aws/webpay.py --create-parameters`. Solicita ambos valores
-con el eco de terminal desactivado. Los entrega por stdin a AWS CLI como
+con el eco de terminal desactivado. Los entrega a AWS CLI mediante un
+archivo anónimo en memoria y los guarda en Parameter Store como
 `SecureString` Standard y conserva parámetros que ya existan. Esta acción
 requiere `ssm:PutParameter` para los dos nombres y usa la clave administrada
 por AWS de Parameter Store. También se pueden crear desde la consola.

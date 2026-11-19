@@ -347,26 +347,21 @@ class AwsDispatchTests(unittest.TestCase):
 
 class CredentialProvisionTests(unittest.TestCase):
     @unittest.skipUnless(sys.platform == "linux" and shutil.which("aws"), "Requiere AWS CLI en Linux")
-    def test_aws_cli_accepts_securestring_json_from_stdin_without_an_api_call(self):
+    def test_aws_cli_accepts_securestring_json_from_anonymous_memory_without_an_api_call(self):
         payload = {"Name": host.PARAMETERS["WEBPAY_API_KEY"], "Value": KEY,
                    "Type": "SecureString", "Tier": "Standard", "Overwrite": False}
         env = {"AWS_EC2_METADATA_DISABLED": "true", "AWS_CONFIG_FILE": "/dev/null",
                "AWS_SHARED_CREDENTIALS_FILE": "/dev/null", "AWS_ACCESS_KEY_ID": "fixture",
                "AWS_SECRET_ACCESS_KEY": "fixture"}
         with patch.dict(os.environ, env):
-            cli = subprocess.run(
-                ["aws", "--region", webpay.REGION, "--no-cli-pager", "--endpoint-url",
-                 "http://127.0.0.1:1", "ssm", "put-parameter", "--cli-input-json", "file:///dev/stdin",
-                 "--generate-cli-skeleton", "output"],
-                input=json.dumps(payload).encode(), capture_output=True, timeout=15,
-            )
-        self.assertEqual(cli.returncode, 0, cli.stderr.decode(errors="replace").replace(KEY, "[redacted]"))
-        self.assertIn("Version", json.loads(cli.stdout))
+            result = webpay.aws("ssm", "put-parameter", "--endpoint-url", "http://127.0.0.1:1",
+                                "--generate-cli-skeleton", "output", input_json=payload)
+        self.assertIn("Version", result)
 
     def test_creates_only_fixed_securestrings_and_never_prints_secret_values(self):
         output = io.StringIO()
         code = "001234567890"
-        with patch.object(webpay.sys, "platform", "linux"), \
+        with patch.object(webpay.os, "memfd_create", create=True), \
              patch.object(webpay.sys.stdin, "isatty", return_value=True), \
              patch.object(webpay.getpass, "getpass", side_effect=[code, KEY]), \
              patch.object(webpay, "aws", side_effect=[{"Version": 1}, {"AlreadyExists": True}]) as aws, \
@@ -377,7 +372,7 @@ class CredentialProvisionTests(unittest.TestCase):
         self.assertEqual([item["Name"] for item in payloads], list(host.PARAMETERS.values()))
         self.assertEqual([item["Value"] for item in payloads], [code, KEY])
         for call, item in zip(aws.call_args_list, payloads):
-            self.assertEqual(call.args, ("ssm", "put-parameter", "--cli-input-json", "file:///dev/stdin"))
+            self.assertEqual(call.args, ("ssm", "put-parameter"))
             self.assertEqual(item["Type"], "SecureString")
             self.assertEqual(item["Tier"], "Standard")
             self.assertFalse(item["Overwrite"])
@@ -385,11 +380,17 @@ class CredentialProvisionTests(unittest.TestCase):
         self.assertNotIn(code, output.getvalue())
         self.assertNotIn(KEY, output.getvalue())
 
-    def test_cli_subprocess_receives_secrets_via_stdin_not_process_arguments(self):
-        with patch.object(webpay.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, b'{"Version":1}')) as cli:
-            webpay.aws("ssm", "put-parameter", "--cli-input-json", "file:///dev/stdin", input_json={"Value": KEY})
-        self.assertNotIn(KEY, repr(cli.call_args.args))
-        self.assertEqual(json.loads(cli.call_args.kwargs["input"]), {"Value": KEY})
+    @unittest.skipUnless(hasattr(os, "memfd_create"), "Requiere descriptor anónimo Linux")
+    def test_cli_subprocess_receives_secrets_via_inherited_descriptor_not_process_arguments(self):
+        def inspect_input(args, pass_fds, **kwargs):
+            self.assertNotIn(KEY, repr(args))
+            self.assertEqual(len(pass_fds), 1)
+            self.assertEqual(json.loads(os.pread(pass_fds[0], 4096, 0)), {"Value": KEY})
+            self.assertEqual(args[-1], f"file:///proc/self/fd/{pass_fds[0]}")
+            return subprocess.CompletedProcess(args, 0, b'{"Version":1}')
+
+        with patch.object(webpay.subprocess, "run", side_effect=inspect_input):
+            webpay.aws("ssm", "put-parameter", input_json={"Value": KEY})
 
     def test_permission_error_is_sanitized_even_if_stderr_contains_credentials(self):
         denied = subprocess.CalledProcessError(1, "aws", stderr=f"AccessDenied {KEY}".encode())
