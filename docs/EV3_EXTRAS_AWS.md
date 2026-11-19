@@ -184,3 +184,35 @@ esa modalidad para reconciliar pendientes y evitar que Pago antiguo trate
 una aprobación Webpay como un pago simulado. Conservar los respaldos, el
 historial y la cola de entregas a DynamoDB. El catálogo vivo de 23 productos
 y su stock se protegen con el procedimiento de la guía base.
+
+## Release CLP
+
+| Servicio | CI | Imagen verificada por digest |
+| --- | --- | --- |
+| Productos | [44588436397](https://github.com/ZorVaK749/fazbears-productos/actions/runs/44588436397) | `ghcr.io/zorvak749/fazbears-productos@sha256:b6738b92eb0372d30782154e2c709b3f162c2afe87d03a46be84a42ef1ddee37` |
+| Carrito | [44587396847](https://github.com/ZorVaK749/fazbear-carrito/actions/runs/44587396847) | `ghcr.io/zorvak749/fazbear-carrito@sha256:0972d9b0082649b842d46fadab78c960b61d3699d7009bb6ea9a927ae3b04270` |
+| Orden | [44587392466](https://github.com/ZorVaK749/fazbear-orden/actions/runs/44587392466) | `ghcr.io/zorvak749/fazbear-orden@sha256:29c351c0208ee67fff3c496b39305af67a22d6769fcb3574899a712918204f87` |
+| Notificaciones | [44587395075](https://github.com/ZorVaK749/fazbear-notificaciones/actions/runs/44587395075) | `ghcr.io/zorvak749/fazbear-notificaciones@sha256:7338142218d895e20fd0710cea5e229e1de7b4ba5e03504032103a02cc7e72f8` |
+| Frontend | [44587395754](https://github.com/ZorVaK749/fazbears-frontend/actions/runs/44587395754) | `ghcr.io/zorvak749/fazbears-frontend@sha256:010cd44c011df91d13101b5f7be744861324161ca0803d760191f5ce1de53606` |
+
+- [x] Publicar las cinco imágenes y verificar los digests en GHCR.
+- [ ] Confirmar el datasource vivo de Productos con el inventario SSM.
+- [ ] Obtener y restaurar en aislamiento un respaldo verificable de los 23 productos.
+- [ ] Aplicar el cambio de precios en una ventana de despliegue y comprobar IDs, stock y salud.
+- [ ] Actualizar Carrito, Orden, Notificaciones y Frontend por digest.
+- [ ] Validar carrito guardado, nueva cotización y pago Webpay en el entorno de integración.
+
+El orden del cambio, el comando de inventario y las condiciones para recuperar
+el despliegue están en la [guía de CLP](../deploy/aws/README.md#cambio-de-catálogo-a-clp).
+La [prueba integrada de CLP](https://github.com/ZorVaK749/fazbear-pago/actions/runs/44588570206)
+usa un catálogo y pagos sintéticos en GitHub Actions.
+
+Una vez verificados los nuevos precios y el stock en Productos y los demás
+servicios del backend, actualizar Fargate desde CloudShell.
+
+```bash
+cd "$HOME/pedidos360-ops-pago" &&
+git pull --ff-only origin ev3/webpay-integracion &&
+python3 deploy/aws/frontend_image.py --apply --image \
+  ghcr.io/zorvak749/fazbears-frontend@sha256:010cd44c011df91d13101b5f7be744861324161ca0803d760191f5ce1de53606
+```
