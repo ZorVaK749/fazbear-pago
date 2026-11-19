@@ -1,11 +1,12 @@
 import gzip
 import json
+from decimal import Decimal
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import clp_productos
@@ -66,3 +67,53 @@ def main(args):
                                 capture_output=True, check=True)
         self.assertEqual(result.stdout.decode().strip(), "ms-productos prepare")
         self.assertEqual(clp_productos.request("prepare")["InstanceIds"], ["i-0bc8e0a99f79ccac6"])
+
+    def test_before_and_after_catalog_require_same_fields_except_planned_prices(self):
+        lines = [",".join(host.FIELDS)] + [f"{i},Pizza {i},,12.99,PIZZA,,{i-1}" for i in range(1, 24)]
+        old = host.catalog_rows("\n".join(lines))
+        new = host.catalog_rows("\n".join(lines).replace("12.99", "12990.00"))
+        plan = {row["NOMBRE"]: (Decimal("12.99"), Decimal("12990")) for row in old}
+        host.verify_prices(old, new, plan)
+        new[0]["STOCK"] = "2"
+        with self.assertRaisesRegex(host.RolloutError, "stock"):
+            host.verify_prices(old, new, plan)
+        new[0]["STOCK"] = "0"
+        new[0]["PRECIO"] = "129.90"
+        with self.assertRaisesRegex(host.RolloutError, "plan CLP"):
+            host.verify_prices(old, new, plan)
+
+    def test_after_activation_recovery_cannot_start_original_container(self):
+        rollout = host.ProductsHost()
+        with patch.object(rollout, "docker") as docker:
+            with self.assertRaisesRegex(host.RolloutError, "antes de activar"):
+                rollout.recover({"phase": "activation_requested"})
+        docker.assert_not_called()
+
+    def test_failed_candidate_readiness_keeps_activation_journal_and_no_recovery(self):
+        rollout = host.ProductsHost()
+        current = {"Id": "old", "Config": {"Entrypoint": ["java", "-jar", "app.jar"], "WorkingDir": "/app"},
+                   "HostConfig": {"NetworkMode": "bridge"}}
+        stopped = {"State": {"Running": False, "ExitCode": 143}}
+        db = host.Database(Path("/data/catalog.mv.db"), host.PurePosixPath("/data/catalog"), "", "sa", "")
+        phases = []
+
+        def save(state, phase):
+            state["phase"] = phase
+            phases.append(phase)
+
+        with patch.multiple(rollout, source=Mock(return_value=current),
+                            state=Mock(return_value={"phase": "prepared", "id": "backup",
+                                                     "container": "old", "sha256": "verified"}),
+                            docker=Mock(), inspect=Mock(return_value=stopped),
+                            candidate_config=Mock(), read_catalog=Mock(return_value=([], None)),
+                            stage=Mock(), save=save, wait_http=Mock(side_effect=host.RolloutError("health timeout")),
+                            recover=Mock()), \
+                patch.object(rollout, "create", return_value="new"), \
+                patch.object(host, "database", return_value=db), \
+                patch.object(host, "sha256", return_value="verified"), \
+                patch.object(host, "copy_stable", return_value="cold"), \
+                patch.object(host, "clone_database", return_value=(Path("/clone"), host.PurePosixPath("/clone/db"))):
+            with self.assertRaisesRegex(host.RolloutError, "health timeout"):
+                rollout.apply()
+            rollout.recover.assert_not_called()
+        self.assertEqual(phases, ["stopping", "prepared_for_switch", "activation_requested"])

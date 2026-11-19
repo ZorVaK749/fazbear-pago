@@ -10,10 +10,12 @@ import shlex
 import sys
 
 from clp_inventory import SERVICES
-from webpay import ACCOUNT, RolloutError, aws, run_ssm
+from webpay import ACCOUNT, RolloutError, aws, resolve_target, run_ssm, target_state, wait_for_target
 
 INSTANCE = SERVICES["productos"][0]
+PORT = SERVICES["productos"][2]
 MODULES = ("webpay_host", "clp_inventory_host", "clp_productos_host")
+MODES = ("prepare", "status", "apply", "recover")
 LOADER = """
 import gzip, json, sys, types
 for name, source in json.loads(gzip.decompress(sys.stdin.buffer.read())):
@@ -25,7 +27,7 @@ sys.exit(module.main(sys.argv[1:]))
 
 
 def request(mode):
-    if mode not in {"prepare", "status"}:
+    if mode not in MODES:
         raise ValueError("Modo de Productos no admitido")
     source = Path(__file__).parent
     scripts = [(name, (source / (name + ".py")).read_text(encoding="utf-8")) for name in MODULES]
@@ -38,21 +40,28 @@ def request(mode):
         "InstanceIds": [INSTANCE],
         "Comment": f"Pedidos360 Productos CLP {mode}",
         "TimeoutSeconds": 90,
-        "Parameters": {"commands": commands, "executionTimeout": ["180"]},
+        "Parameters": {"commands": commands, "executionTimeout": ["540" if mode == "apply" else "180"]},
     }
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     modes = parser.add_mutually_exclusive_group(required=True)
-    modes.add_argument("--prepare", dest="mode", action="store_const", const="prepare")
-    modes.add_argument("--status", dest="mode", action="store_const", const="status")
+    for mode in MODES:
+        modes.add_argument(f"--{mode}", dest="mode", action="store_const", const=mode)
     args = parser.parse_args()
     try:
         if aws("sts", "get-caller-identity")["Account"] != ACCOUNT:
             raise RolloutError(f"La sesión AWS debe corresponder a la cuenta {ACCOUNT}.")
-        run_ssm(request(args.mode), INSTANCE, timeout=240,
-                failure="SSM no completó la preparación de Productos. Revise --status y el Command ID.")
+        if args.mode == "apply":
+            arn, target_id, interval = resolve_target(None, instance=INSTANCE, port=PORT)
+            if target_state(arn, target_id, True, port=PORT) != "healthy":
+                raise RolloutError("El Target Group de Productos debe estar healthy antes del cambio.")
+            print(f"Target Group de Productos: {arn}", flush=True)
+        run_ssm(request(args.mode), INSTANCE, timeout=600 if args.mode == "apply" else 240,
+                failure="SSM no completó la operación de Productos. Revise --status y el Command ID.")
+        if args.mode == "apply":
+            wait_for_target(arn, target_id, interval, port=PORT)
     except RolloutError as error:
         print(f"ERROR: {error}", file=sys.stderr)
         return 1

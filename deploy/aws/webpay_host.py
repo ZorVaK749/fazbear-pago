@@ -183,9 +183,10 @@ class Host:
                 or host.get("AutoRemove")):
             raise RolloutError("La imagen, puerto, usuario, memoria o política Docker no coincide con el inventario.")
 
-    def candidate_config(self, current, overrides):
-        config = dict(current["Config"], Image=IMAGE)
-        config["Env"] = [line for line in config["Env"] if line.split("=", 1)[0] not in WEBPAY_KEYS]
+    def candidate_config(self, current, overrides, *, image=IMAGE, replace_keys=WEBPAY_KEYS):
+        config = dict(current["Config"], Image=image)
+        removed = replace_keys | overrides.keys()
+        config["Env"] = [line for line in config["Env"] if line.split("=", 1)[0] not in removed]
         config["Env"].extend(f"{key}={value}" for key, value in overrides.items())
         host = current["HostConfig"]
         if host["NetworkMode"].startswith("container:") or host.get("VolumesFrom"):

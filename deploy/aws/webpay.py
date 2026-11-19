@@ -80,11 +80,11 @@ def create_parameters():
         print(f"{name}: {result}")
 
 
-def private_ip():
-    reservations = aws("ec2", "describe-instances", "--instance-ids", INSTANCE)["Reservations"]
+def private_ip(instance_id=INSTANCE):
+    reservations = aws("ec2", "describe-instances", "--instance-ids", instance_id)["Reservations"]
     instance = reservations[0]["Instances"][0]
-    if instance["InstanceId"] != INSTANCE or instance["State"]["Name"] != "running":
-        raise RolloutError("La EC2 de Pago debe estar en ejecución.")
+    if instance["InstanceId"] != instance_id or instance["State"]["Name"] != "running":
+        raise RolloutError("La EC2 de destino debe estar en ejecución.")
     return instance["PrivateIpAddress"]
 
 
@@ -92,43 +92,43 @@ def registered(group):
     return aws("elbv2", "describe-target-health", "--target-group-arn", group)["TargetHealthDescriptions"]
 
 
-def match(target, target_id):
-    return target["Target"]["Id"] == target_id and target["Target"]["Port"] == PORT
+def match(target, target_id, port=PORT):
+    return target["Target"]["Id"] == target_id and target["Target"]["Port"] == port
 
 
-def resolve_target(explicit):
-    ip = private_ip()
+def resolve_target(explicit, *, instance=INSTANCE, port=PORT):
+    ip = private_ip(instance)
     extra = ("--target-group-arns", explicit) if explicit else ()
     groups = aws("elbv2", "describe-target-groups", *extra)["TargetGroups"]
     candidates = []
     for group in groups:
-        id_for_type = {"instance": INSTANCE, "ip": ip}.get(group["TargetType"])
-        port_matches = group["Port"] == PORT or group.get("HealthCheckPort") == str(PORT)
+        id_for_type = {"instance": instance, "ip": ip}.get(group["TargetType"])
+        port_matches = group["Port"] == port or group.get("HealthCheckPort") == str(port)
         if id_for_type and (explicit or port_matches):
             arn = group["TargetGroupArn"]
             targets = registered(arn)
-            if any(match(target, id_for_type) for target in targets):
+            if any(match(target, id_for_type, port) for target in targets):
                 candidates.append((arn, id_for_type, int(group["HealthCheckIntervalSeconds"])))
     if len(candidates) != 1:
-        raise RolloutError("El Target Group de Pago es ambiguo o no se encontró. Indique --target-group-arn.")
+        raise RolloutError("El Target Group para la EC2 y el puerto esperados es ambiguo o no se encontró.")
     return candidates[0]
 
 
-def target_state(arn, target_id, sole=False):
+def target_state(arn, target_id, sole=False, *, port=PORT):
     targets = registered(arn)
-    matches = [target for target in targets if match(target, target_id)]
+    matches = [target for target in targets if match(target, target_id, port)]
     if len(matches) != 1 or (sole and len(targets) != 1):
-        raise RolloutError("Se requiere un único destino de Pago registrado en el Target Group seleccionado.")
+        raise RolloutError("Se requiere un único destino para la EC2 y el puerto en el Target Group seleccionado.")
     return matches[0]["TargetHealth"]["State"]
 
 
-def wait_for_target(arn, target_id, interval, sole=True):
+def wait_for_target(arn, target_id, interval, sole=True, *, port=PORT):
     # The first healthy response can still be cached from the previous container.
     deadline = time.monotonic() + max(120, 3 * interval + 25)
     first_healthy = None
     while time.monotonic() < deadline:
         current = time.monotonic()
-        if target_state(arn, target_id, sole) == "healthy":
+        if target_state(arn, target_id, sole, port=port) == "healthy":
             if first_healthy is None:
                 first_healthy = current
             elif current - first_healthy >= interval:

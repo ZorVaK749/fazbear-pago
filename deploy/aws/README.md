@@ -226,6 +226,30 @@ Guarda el resultado en `/var/lib/pedidos360-clp-productos` con permisos privados
 El corte usa un respaldo en frío para incluir cualquier cambio posterior de
 stock. `--status` muestra la fase y el nombre de la copia preliminar.
 
+Con la fase `prepared` y las compras nuevas pausadas, ejecutar el corte de
+Productos en la ventana acordada.
+
+```bash
+python3 deploy/aws/clp_productos.py --apply
+```
+
+El corte exige el Target Group sano y prepara la imagen por digest antes de
+detener Productos. Toma el respaldo en frío y ejecuta la migración en un
+archivo H2 independiente bajo el montaje actual. El candidato inicial no
+publica puertos y usa brokers locales desactivados para la comprobación.
+El script contrasta precios, IDs, descripciones y stock por producto antes de
+habilitar el nuevo contenedor. El H2 original y el contenedor anterior se
+conservan para recuperación. `--status` muestra la ruta H2 CLP efectiva para
+reutilizar en siguientes despliegues.
+
+Ante una interrupción previa a la activación, comprobar el diario con
+`--status` y usar `--recover` si la fase quedó en `stopping`,
+`validating_copy` o `prepared_for_switch`. A partir de
+`activation_requested`, conciliar cualquier compra o descuento antes de
+decidir una recuperación. El chequeo ALB requiere `ec2:DescribeInstances`,
+`elasticloadbalancing:DescribeTargetGroups` y
+`elasticloadbalancing:DescribeTargetHealth`.
+
 ## Orden del cambio
 
 1. Pausar nuevas compras y cambios en el catálogo durante la ventana. Dejar
