@@ -250,6 +250,12 @@ decidir una recuperación. El chequeo ALB requiere `ec2:DescribeInstances`,
 `elasticloadbalancing:DescribeTargetGroups` y
 `elasticloadbalancing:DescribeTargetHealth`.
 
+Si el corte verificó la copia H2 y la comprobación HTTP quedó pendiente,
+usar `--status` y `--verify`. Comprueban la publicación Docker en la IP
+privada de la EC2 y en loopback. `--verify` vuelve a comprobar el candidato
+del diario y el Target Group sin reiniciar el contenedor ni repetir la
+migración. `--status` muestra códigos HTTP y categorías de arranque.
+
 ## Orden del cambio
 
 1. Pausar nuevas compras y cambios en el catálogo durante la ventana. Dejar

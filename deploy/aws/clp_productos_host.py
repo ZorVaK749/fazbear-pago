@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 import hashlib
 import io
+from ipaddress import IPv4Address
 import os
 from pathlib import Path, PurePosixPath
 import re
@@ -14,7 +15,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from urllib.error import HTTPError, URLError
+from urllib.error import HTTPError
 from urllib.request import build_opener, ProxyHandler
 import uuid
 import zipfile
@@ -28,6 +29,16 @@ CLP_IMAGE = "ghcr.io/zorvak749/fazbears-productos@sha256:b6738b92eb0372d30782154
 STATE_DIR = Path("/var/lib/pedidos360-clp-productos")
 ROW_SQL = "SELECT ID, NOMBRE, DESCRIPCION, PRECIO, CATEGORIA, IMAGEN_URL, STOCK FROM PRODUCTOS ORDER BY ID"
 FIELDS = ("ID", "NOMBRE", "DESCRIPCION", "PRECIO", "CATEGORIA", "IMAGEN_URL", "STOCK")
+PRODUCTS_PORT = 8081
+PRODUCTS_HTTP = {200, 401, 403}
+STARTUP_DIAGNOSTICS = {
+    "Spring completó el arranque": rb"Started ProductosApplication",
+    "Fallo de arranque de Spring": rb"Application run failed|APPLICATION FAILED TO START",
+    "Error JDBC/H2": rb"JdbcSQL|Failed to initialize pool|Unable to open JDBC Connection",
+    "Error conectando a RabbitMQ": rb"AmqpConnectException|AmqpAuthenticationException",
+    "Error obteniendo la configuración de Entra": rb"Unable to resolve the Configuration with the provided Issuer",
+    "Puerto en uso": rb"Port \d+ was already in use|BindException",
+}
 
 
 @dataclass(frozen=True)
@@ -144,9 +155,10 @@ def clone_database(db, backup, tag):
 
 
 class ProductsHost(Host):
-    def __init__(self):
+    def __init__(self, address="127.0.0.1"):
         self.state_dir = STATE_DIR
         self.journal = STATE_DIR / "current.json"
+        self.address = str(IPv4Address(address))
 
     def source(self):
         current = self.inspect(NAME)
@@ -260,9 +272,17 @@ class ProductsHost(Host):
         # From this point the new database can receive legitimate traffic and stock changes.
         self.save(state, "activation_requested")
         self.docker("start", state["candidate"])
-        self.wait_http(state["candidate"])
+        self.verify(state)
+
+    def verify(self, state):
+        if state.get("phase") not in {"activation_requested", "active"} or not state.get("candidate"):
+            raise RolloutError("El diario no tiene un candidato CLP activado para verificar.")
+        candidate = self.inspect(NAME)
+        if candidate["Id"] != state["candidate"] or candidate["Config"]["Image"] != CLP_IMAGE:
+            raise RolloutError("El contenedor activo no coincide con el candidato CLP del diario.")
+        address, code = self.wait_http(candidate["Id"])
         self.save(state, "active")
-        print("Productos CLP responde en el puerto 8081.")
+        print(f"Productos CLP responde HTTP {code} en {address}:{PRODUCTS_PORT}.")
 
     def stage(self, state, current, db, overrides, clone, before):
         isolated = dict(overrides, EV3_AWS_CATALOG_SNAPSHOT="false", EV3_KAFKA_INITIAL_DELAY_MS="900000",
@@ -321,23 +341,59 @@ class ProductsHost(Host):
         self.wait_http(previous["Id"])
         self.save(state, "recovered")
 
-    def wait_http(self, expected_id):
+    def probe_http(self, address):
         opener = build_opener(ProxyHandler({}), NoRedirect())
+        try:
+            with opener.open(f"http://{address}:{PRODUCTS_PORT}/api/productos", timeout=2) as response:
+                return response.status
+        except HTTPError as error:
+            error.close()
+            return error.code
+        except OSError:
+            return None
+
+    def probe_addresses(self):
+        return tuple(dict.fromkeys((self.address, "127.0.0.1")))
+
+    def wait_http(self, expected_id):
         deadline = time.monotonic() + 70
         while time.monotonic() < deadline:
-            if self.inspect(NAME)["Id"] != expected_id:
+            current = self.inspect(NAME)
+            if current["Id"] != expected_id:
                 raise RolloutError("El nombre activo cambió durante la verificación.")
-            try:
-                with opener.open("http://127.0.0.1:8081/api/productos", timeout=2) as response:
-                    if response.status == 200:
-                        return
-            except HTTPError as error:
-                if error.code == 401:
-                    return
-            except (URLError, OSError):
-                pass
+            if current["State"]["Running"] and not current["State"].get("Restarting"):
+                for address in self.probe_addresses():
+                    code = self.probe_http(address)
+                    if code in PRODUCTS_HTTP:
+                        return address, code
+            elif current["State"]["Status"] in {"exited", "dead"}:
+                break
             time.sleep(3)
-        raise RolloutError("Productos no respondió en el puerto 8081. Revise --status.")
+        self.runtime_status(self.inspect(expected_id))
+        raise RolloutError("Productos no respondió en las direcciones comprobadas. Revise --status.")
+
+    def runtime_status(self, container):
+        state = container["State"]
+        status = state.get("Status", "desconocido")
+        print(f"Docker: {status} · reinicios {container.get('RestartCount', 0)} · salida {state.get('ExitCode', 0)}")
+        if state.get("OOMKilled"):
+            print("Docker registró una terminación por memoria.")
+        ports = container["HostConfig"].get("PortBindings") or {}
+        for container_port, bindings in ports.items():
+            for binding in bindings or []:
+                print(f"Publicación Docker: {binding['HostIp'] or 'todas las interfaces'}:{binding['HostPort']} → {container_port}")
+        if state.get("Running"):
+            for address in self.probe_addresses():
+                code = self.probe_http(address)
+                print(f"GET {address}:{PRODUCTS_PORT}/api/productos · " +
+                      (f"HTTP {code}" if code is not None else "sin respuesta"))
+        try:
+            logs = self.docker("logs", "--tail", "120", container["Id"])
+        except RolloutError:
+            return
+        for label, pattern in STARTUP_DIAGNOSTICS.items():
+            if re.search(pattern, logs):
+                print(f"Diagnóstico: {label}.")
 
     def status(self):
         state = self.state()
@@ -350,19 +406,25 @@ class ProductsHost(Host):
             print(f"Contenedor CLP: {state['candidate'][:12]}")
         if "database" in state:
             print(f"Ruta H2 CLP en el contenedor: {state['database']}")
+        if state.get("phase") in {"activation_requested", "active"}:
+            active = self.find(NAME)
+            if active and active["Id"] == state.get("candidate"):
+                self.runtime_status(active)
+            else:
+                print("El candidato CLP del diario no tiene el nombre activo.")
 
 
 def main(args):
     os.umask(0o077)
-    mode, = args
-    host = ProductsHost()
+    mode, address = args
+    host = ProductsHost(address)
     try:
         if mode == "status":
             host.status()
-        elif mode in {"prepare", "apply", "recover"}:
+        elif mode in {"prepare", "apply", "verify", "recover"}:
             with host.locked():
-                if mode == "recover":
-                    host.recover(host.state())
+                if mode in {"verify", "recover"}:
+                    getattr(host, mode)(host.state())
                 else:
                     getattr(host, mode)()
         else:

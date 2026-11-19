@@ -4,18 +4,19 @@
 import argparse
 import base64
 import gzip
+from ipaddress import IPv4Address
 import json
 from pathlib import Path
 import shlex
 import sys
 
 from clp_inventory import SERVICES
-from webpay import ACCOUNT, RolloutError, aws, resolve_target, run_ssm, target_state, wait_for_target
+from webpay import ACCOUNT, RolloutError, aws, private_ip, resolve_target, run_ssm, target_state, wait_for_target
 
 INSTANCE = SERVICES["productos"][0]
 PORT = SERVICES["productos"][2]
 MODULES = ("webpay_host", "clp_inventory_host", "clp_productos_host")
-MODES = ("prepare", "status", "apply", "recover")
+MODES = ("prepare", "status", "apply", "verify", "recover")
 LOADER = """
 import gzip, json, sys, types
 for name, source in json.loads(gzip.decompress(sys.stdin.buffer.read())):
@@ -26,15 +27,16 @@ sys.exit(module.main(sys.argv[1:]))
 """.strip()
 
 
-def request(mode):
+def request(mode, address="127.0.0.1"):
     if mode not in MODES:
         raise ValueError("Modo de Productos no admitido")
     source = Path(__file__).parent
+    address = str(IPv4Address(address))
     scripts = [(name, (source / (name + ".py")).read_text(encoding="utf-8")) for name in MODULES]
     bundle = base64.b64encode(gzip.compress(json.dumps(scripts).encode(), mtime=0)).decode()
     commands = ["exec bash -s <<'PEDIDOS360_CLP'", "set -euo pipefail", "umask 077", "{"]
     commands.extend(f"printf %s '{bundle[i:i + 2000]}'" for i in range(0, len(bundle), 2000))
-    commands += [f"}} | base64 -d | python3 -c {shlex.quote(LOADER)} {mode}", "PEDIDOS360_CLP"]
+    commands += [f"}} | base64 -d | python3 -c {shlex.quote(LOADER)} {mode} {address}", "PEDIDOS360_CLP"]
     return {
         "DocumentName": "AWS-RunShellScript",
         "InstanceIds": [INSTANCE],
@@ -53,14 +55,15 @@ def main():
     try:
         if aws("sts", "get-caller-identity")["Account"] != ACCOUNT:
             raise RolloutError(f"La sesión AWS debe corresponder a la cuenta {ACCOUNT}.")
-        if args.mode == "apply":
+        if args.mode in {"apply", "verify"}:
             arn, target_id, interval = resolve_target(None, instance=INSTANCE, port=PORT)
-            if target_state(arn, target_id, True, port=PORT) != "healthy":
+            if args.mode == "apply" and target_state(arn, target_id, True, port=PORT) != "healthy":
                 raise RolloutError("El Target Group de Productos debe estar healthy antes del cambio.")
             print(f"Target Group de Productos: {arn}", flush=True)
-        run_ssm(request(args.mode), INSTANCE, timeout=600 if args.mode == "apply" else 240,
+        address = private_ip(INSTANCE) if args.mode != "prepare" else "127.0.0.1"
+        run_ssm(request(args.mode, address), INSTANCE, timeout=600 if args.mode == "apply" else 240,
                 failure="SSM no completó la operación de Productos. Revise --status y el Command ID.")
-        if args.mode == "apply":
+        if args.mode in {"apply", "verify"}:
             wait_for_target(arn, target_id, interval, port=PORT)
     except RolloutError as error:
         print(f"ERROR: {error}", file=sys.stderr)

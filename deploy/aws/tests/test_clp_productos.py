@@ -67,6 +67,10 @@ def main(args):
                                 capture_output=True, check=True)
         self.assertEqual(result.stdout.decode().strip(), "ms-productos prepare")
         self.assertEqual(clp_productos.request("prepare")["InstanceIds"], ["i-0bc8e0a99f79ccac6"])
+        request = clp_productos.request("verify", "172.31.15.227")
+        self.assertIn(" verify 172.31.15.227", request["Parameters"]["commands"][-2])
+        with self.assertRaises(ValueError):
+            clp_productos.request("verify", "172.31.15.227 extra")
 
     def test_before_and_after_catalog_require_same_fields_except_planned_prices(self):
         lines = [",".join(host.FIELDS)] + [f"{i},Pizza {i},,12.99,PIZZA,,{i-1}" for i in range(1, 24)]
@@ -94,6 +98,7 @@ def main(args):
         current = {"Id": "old", "Config": {"Entrypoint": ["java", "-jar", "app.jar"], "WorkingDir": "/app"},
                    "HostConfig": {"NetworkMode": "bridge"}}
         stopped = {"State": {"Running": False, "ExitCode": 143}}
+        candidate = {"Id": "new", "Config": {"Image": host.CLP_IMAGE}}
         db = host.Database(Path("/data/catalog.mv.db"), host.PurePosixPath("/data/catalog"), "", "sa", "")
         phases = []
 
@@ -104,7 +109,7 @@ def main(args):
         with patch.multiple(rollout, source=Mock(return_value=current),
                             state=Mock(return_value={"phase": "prepared", "id": "backup",
                                                      "container": "old", "sha256": "verified"}),
-                            docker=Mock(), inspect=Mock(return_value=stopped),
+                            docker=Mock(), inspect=Mock(side_effect=[stopped, candidate]),
                             candidate_config=Mock(), read_catalog=Mock(return_value=([], None)),
                             stage=Mock(), save=save, wait_http=Mock(side_effect=host.RolloutError("health timeout")),
                             recover=Mock()), \
@@ -117,3 +122,22 @@ def main(args):
                 rollout.apply()
             rollout.recover.assert_not_called()
         self.assertEqual(phases, ["stopping", "prepared_for_switch", "activation_requested"])
+
+    def test_private_address_is_used_when_loopback_is_not_published(self):
+        rollout = host.ProductsHost("172.31.15.227")
+        container = {"Id": "new", "State": {"Running": True}}
+        with patch.object(rollout, "inspect", return_value=container), \
+                patch.object(rollout, "probe_http", side_effect=lambda ip: 401 if ip == rollout.address else None) as probe:
+            self.assertEqual(rollout.wait_http("new"), ("172.31.15.227", 401))
+        probe.assert_called_once_with("172.31.15.227")
+
+    def test_verify_only_checks_activated_candidate_then_updates_journal(self):
+        rollout = host.ProductsHost("172.31.15.227")
+        state = {"phase": "activation_requested", "candidate": "new"}
+        candidate = {"Id": "new", "Config": {"Image": host.CLP_IMAGE}}
+        with patch.object(rollout, "inspect", return_value=candidate), \
+                patch.object(rollout, "wait_http", return_value=("172.31.15.227", 401)), \
+                patch.object(rollout, "save") as save, patch.object(rollout, "docker") as docker:
+            rollout.verify(state)
+        save.assert_called_once_with(state, "active")
+        docker.assert_not_called()
