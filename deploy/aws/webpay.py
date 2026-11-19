@@ -138,14 +138,14 @@ def execute(mode, source, requested_target, check_credentials=False):
     mutating = mode in {"apply", "rollback", "recover"}
     try:
         arn, target_id, interval = resolve_target(requested_target)
-        initial = target_state(arn, target_id, sole=mutating or mode == "dry-run")
+        initial = target_state(arn, target_id, sole=mutating or mode in {"dry-run", "prepare-rollback"})
     except RolloutError:
         if mode == "status":
             run_host(mode, source, check_credentials)
         raise
     print(f"Target Group: {arn}\nDestino {target_id}:{PORT} · estado inicial {initial}", flush=True)
-    if mode in {"apply", "dry-run"} and initial != "healthy":
-        raise RolloutError("El Target Group de Pago debe estar healthy antes de activar Webpay.")
+    if mode in {"apply", "dry-run", "prepare-rollback"} and initial != "healthy":
+        raise RolloutError("El Target Group de Pago debe estar healthy antes de preparar o activar Webpay.")
     run_host(mode, source, check_credentials)
     if mutating:
         wait_for_target(arn, target_id, interval)

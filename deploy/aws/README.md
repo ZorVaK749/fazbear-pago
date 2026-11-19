@@ -34,6 +34,10 @@ validar la lectura de credenciales desde la EC2 con
 comprueba acceso y formato en memoria. La salida muestra el sistema de la EC2
 y el resultado de la comprobación.
 
+En Amazon Linux 2023, `python3 deploy/aws/webpay.py --prepare-rollback`
+instala el cliente `postgresql15` si falta y ensaya la consulta de solo lectura
+contra RDS con el datasource de Pago. El contenedor continúa en ejecución.
+
 Durante el corte hay una interrupción breve. El script valida que el contenedor
 actual use la imagen fijada, el puerto 8087:8080, UID:GID 10001:10001, 640 MiB y
 `unless-stopped`. Crea un candidato con la configuración Docker y el entorno

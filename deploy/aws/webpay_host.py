@@ -30,7 +30,7 @@ PARAMETERS = {
 }
 WEBPAY_KEYS = {"WEBPAY_ENABLED", "WEBPAY_RETURN_URL", *PARAMETERS}
 WEBPAY_BYTES = {key.encode() for key in WEBPAY_KEYS}
-MODES = ("status", "dry-run", "apply", "rollback", "recover")
+MODES = ("status", "dry-run", "prepare-rollback", "apply", "rollback", "recover")
 
 
 class RolloutError(Exception):
@@ -112,15 +112,23 @@ def webpay_overrides(source):
             "aws", "ssm", "get-parameters", "--region", "us-east-1", "--with-decryption",
             "--no-cli-pager", "--output", "json", "--names", *PARAMETERS.values(),
         ], "EC2 no pudo leer los dos SecureString con su rol.", env=role_env))
-        names = {p["Name"]: p["Value"] for p in response["Parameters"] if p["Type"] == "SecureString"}
-        values = {key: names.get(name, "") for key, name in PARAMETERS.items()}
+        found = {p["Name"]: p for p in response["Parameters"]}
+        missing = [name for name in PARAMETERS.values() if name not in found]
+        if missing:
+            raise RolloutError("Faltan los parámetros: " + ", ".join(missing) + ".")
+        wrong_type = [name for name in PARAMETERS.values() if found[name]["Type"] != "SecureString"]
+        if wrong_type:
+            raise RolloutError("Deben tener tipo SecureString: " + ", ".join(wrong_type) + ".")
+        values = {key: found[name]["Value"] for key, name in PARAMETERS.items()}
     else:
         data = private_file(ENV_FILE.with_name("webpay.credentials")).decode()
         values = env_values(line for line in data.splitlines() if not line.startswith("#"))
     code = values.get("WEBPAY_COMMERCE_CODE", "")
     key = values.get("WEBPAY_API_KEY", "")
-    if not re.fullmatch(r"[0-9]{12}", code) or not re.fullmatch(r"[0-9A-Fa-f]{64}", key):
-        raise RolloutError("Credenciales de integración ausentes o con formato inválido.")
+    if not re.fullmatch(r"[0-9]{12}", code):
+        raise RolloutError("El código de comercio debe tener 12 dígitos.")
+    if not re.fullmatch(r"[0-9A-Fa-f]{64}", key):
+        raise RolloutError("La API key de integración debe tener 64 caracteres hexadecimales.")
     return {"WEBPAY_ENABLED": "true", "WEBPAY_COMMERCE_CODE": code,
             "WEBPAY_API_KEY": key, "WEBPAY_RETURN_URL": RETURN_URL}
 
@@ -371,6 +379,30 @@ class Host:
         else:
             raise RolloutError("No hay un corte recuperable en el diario.")
 
+    def rollback_database_config(self, container):
+        if (container["Config"]["Entrypoint"] != ["java", "-jar", "app.jar"] or container["Config"]["Cmd"]
+                or container["Mounts"]):
+            raise RolloutError("El arranque o los montajes del contenedor requieren verificar el datasource manualmente.")
+        return postgres_env(container["Config"]["Env"])
+
+    def prepare_rollback(self):
+        current = self.inspect(CONTAINER)
+        self.check_container(current)
+        if not current["State"]["Running"] or not self.mode():
+            raise RolloutError("Pago debe estar sano antes de preparar el rollback.")
+        db = self.rollback_database_config(current)
+        if not shutil.which("psql"):
+            if system_release() != "amzn 2023":
+                raise RolloutError("La instalación automática de psql requiere Amazon Linux 2023.")
+            run(["dnf", "install", "-y", "postgresql15"],
+                "No se pudo instalar el cliente postgresql15 desde los repositorios de la EC2.", timeout=240)
+        if not shutil.which("psql"):
+            raise RolloutError("La instalación no dejó psql disponible.")
+        print("psql para rollback: disponible")
+        if self.database_used(db):
+            raise RolloutError("RDS responde y contiene transacciones Webpay. El rollback requiere conciliarlas.")
+        print("PostgreSQL: consulta de rollback verificada. Sin transacciones Webpay.")
+
     def rollback(self):
         state = self.state()
         phase = state.get("phase")
@@ -382,10 +414,7 @@ class Host:
         candidate = self.inspect(state["candidate"])
         if candidate["Name"] != "/" + CONTAINER:
             raise RolloutError("El nombre activo difiere del diario.")
-        if (candidate["Config"]["Entrypoint"] != ["java", "-jar", "app.jar"] or candidate["Config"]["Cmd"]
-                or candidate["Mounts"]):
-            raise RolloutError("El arranque o los montajes del contenedor requieren verificar el datasource manualmente.")
-        db = postgres_env(candidate["Config"]["Env"])
+        db = self.rollback_database_config(candidate)
         if not shutil.which("psql"):
             raise RolloutError("Se requiere psql en EC2 para comprobar el estado de Webpay antes de revertir.")
         self.save(state, "rollback_guard")
@@ -463,6 +492,8 @@ def main():
             with host.locked():
                 if args.mode == "apply":
                     host.apply(args.source)
+                elif args.mode == "prepare-rollback":
+                    host.prepare_rollback()
                 else:
                     getattr(host, args.mode)()
     except RolloutError as error:

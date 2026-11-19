@@ -187,6 +187,25 @@ class RolloutTests(unittest.TestCase):
             self.client.rollback()
         self.assertNotIn(("stop", "-t", "20", "new"), self.client.calls)
 
+    def test_prepare_rollback_installs_only_the_client_on_al2023_then_reads_rds(self):
+        with patch.object(host.shutil, "which", side_effect=[None, "/usr/bin/psql"]), \
+             patch.object(host, "system_release", return_value="amzn 2023"), \
+             patch.object(host, "run") as run, \
+             patch.object(self.client, "database_used", return_value=False) as check:
+            self.client.prepare_rollback()
+            self.assertEqual(run.call_args.args[0], ["dnf", "install", "-y", "postgresql15"])
+            self.assertEqual(check.call_args.args[0]["PGDATABASE"], "payment")
+            self.assertFalse(any(call[0] in {"stop", "start", "restart"} for call in self.client.calls))
+            self.assertFalse(self.client.journal.exists())
+
+    def test_prepare_rollback_refuses_to_install_on_a_different_distribution(self):
+        with patch.object(host.shutil, "which", return_value=None), \
+             patch.object(host, "system_release", return_value="ubuntu 24.04"), \
+             patch.object(host, "run") as run:
+            with self.assertRaisesRegex(host.RolloutError, "Amazon Linux 2023"):
+                self.client.prepare_rollback()
+            run.assert_not_called()
+
     def test_rollback_never_guesses_an_overridden_datasource(self):
         self.client.apply("ssm")
         self.client.containers["new"]["Config"]["Env"].append("SPRING_DATASOURCE_JNDI_NAME=db/other")
@@ -247,7 +266,7 @@ class AwsDispatchTests(unittest.TestCase):
         with patch.object(webpay, "resolve_target", return_value=("arn", "target", 30)), \
              patch.object(webpay, "target_state", return_value="unhealthy"), \
              patch.object(webpay, "run_host") as remote:
-            with self.assertRaisesRegex(host.RolloutError, "antes de activar"):
+            with self.assertRaisesRegex(host.RolloutError, "preparar o activar"):
                 webpay.execute("apply", "ssm", None)
             remote.assert_not_called()
 
@@ -290,9 +309,14 @@ class AwsDispatchTests(unittest.TestCase):
         ]}
         import json
         with patch.object(host, "run", return_value=json.dumps(records).encode()) as aws_cli:
-            with self.assertRaisesRegex(host.RolloutError, "formato inválido"):
+            with self.assertRaisesRegex(host.RolloutError, "tipo SecureString"):
                 host.webpay_overrides("ssm")
             self.assertNotIn(KEY, repr(aws_cli.call_args.args))
+
+    def test_missing_credentials_reports_only_predefined_names(self):
+        with patch.object(host, "run", return_value=b'{"Parameters": []}'):
+            with self.assertRaisesRegex(host.RolloutError, host.PARAMETERS["WEBPAY_API_KEY"]):
+                host.webpay_overrides("ssm")
 
 
 if __name__ == "__main__":
