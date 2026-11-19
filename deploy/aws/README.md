@@ -59,6 +59,27 @@ El script usa el retorno fijo
 `https://p5gsy16utd.execute-api.us-east-1.amazonaws.com/checkout/webpay`.
 Las rutas JWT existentes se mantienen.
 
+## CORS de Webpay en el Gateway
+
+Si el navegador bloquea el `OPTIONS` de Webpay o el Gateway responde 204
+sin encabezados CORS, usar:
+
+```bash
+python3 deploy/aws/webpay_cors.py --dry-run
+python3 deploy/aws/webpay_cors.py --apply
+```
+
+El comando revisa la cuenta y el stage `ev3`, y agrega el origen del frontend
+y los métodos y encabezados faltantes a la política CORS del HTTP API
+`uuzifgcyd2`. Conserva los valores existentes. El cambio se aplica al API,
+cuya política CORS comparten sus stages. Para un stage con despliegue manual,
+revisar los cambios pendientes antes de publicar. Las rutas y autorizadores
+permanecen vigentes. El operador necesita `apigateway:GET` para el API y el
+stage, y `apigateway:PATCH` sobre el API para aplicar.
+
+`--verify` consulta los preflights de las cinco rutas del checkout y confirma
+401 en capacidad sin JWT. Esa comprobación evita crear pagos o pedidos.
+
 ## Credenciales e IAM
 
 **Opción principal, Parameter Store.** El responsable del laboratorio carga
