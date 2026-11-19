@@ -3,9 +3,11 @@ from contextlib import redirect_stdout
 import copy
 import gzip
 import io
+import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -254,6 +256,13 @@ class AwsDispatchTests(unittest.TestCase):
                 webpay.execute("dry-run", "ssm", arn)
             resolve.assert_not_called()
 
+    def test_provisioning_checks_aws_account_without_sending_a_remote_command(self):
+        with patch.object(webpay, "create_parameters") as create, patch.object(webpay, "run_host") as remote:
+            webpay.execute("create-parameters", "ssm", None)
+            webpay.aws.assert_called_once_with("sts", "get-caller-identity")
+            create.assert_called_once()
+            remote.assert_not_called()
+
     def test_payload_contains_reviewed_source_and_switches_only(self):
         request = webpay.ssm_request("apply", "ssm")
         self.assertEqual(request["InstanceIds"], [webpay.INSTANCE])
@@ -325,7 +334,6 @@ class AwsDispatchTests(unittest.TestCase):
             {"Name": host.PARAMETERS["WEBPAY_API_KEY"], "Type": "String", "Value": KEY},
             {"Name": host.PARAMETERS["WEBPAY_COMMERCE_CODE"], "Type": "SecureString", "Value": "000000000000"},
         ]}
-        import json
         with patch.object(host, "run", return_value=json.dumps(records).encode()) as aws_cli:
             with self.assertRaisesRegex(host.RolloutError, "tipo SecureString"):
                 host.webpay_overrides("ssm")
@@ -335,6 +343,51 @@ class AwsDispatchTests(unittest.TestCase):
         with patch.object(host, "run", return_value=b'{"Parameters": []}'):
             with self.assertRaisesRegex(host.RolloutError, host.PARAMETERS["WEBPAY_API_KEY"]):
                 host.webpay_overrides("ssm")
+
+
+class CredentialProvisionTests(unittest.TestCase):
+    @unittest.skipUnless(sys.platform == "linux" and shutil.which("aws"), "Requiere AWS CLI en Linux")
+    def test_aws_cli_accepts_securestring_json_from_stdin_without_an_api_call(self):
+        payload = {"Name": host.PARAMETERS["WEBPAY_API_KEY"], "Value": KEY,
+                   "Type": "SecureString", "Tier": "Standard", "Overwrite": False}
+        result = webpay.aws("ssm", "put-parameter", "--cli-input-json", "file:///dev/stdin",
+                            "--generate-cli-skeleton", "output", input_json=payload)
+        self.assertIn("Version", result)
+
+    def test_creates_only_fixed_securestrings_and_never_prints_secret_values(self):
+        output = io.StringIO()
+        code = "001234567890"
+        with patch.object(webpay.sys, "platform", "linux"), \
+             patch.object(webpay.sys.stdin, "isatty", return_value=True), \
+             patch.object(webpay.getpass, "getpass", side_effect=[code, KEY]), \
+             patch.object(webpay, "aws", side_effect=[{"Version": 1}, {"AlreadyExists": True}]) as aws, \
+             redirect_stdout(output):
+            webpay.create_parameters()
+        self.assertEqual(aws.call_count, 2)
+        payloads = [call.kwargs["input_json"] for call in aws.call_args_list]
+        self.assertEqual([item["Name"] for item in payloads], list(host.PARAMETERS.values()))
+        self.assertEqual([item["Value"] for item in payloads], [code, KEY])
+        for call, item in zip(aws.call_args_list, payloads):
+            self.assertEqual(call.args, ("ssm", "put-parameter", "--cli-input-json", "file:///dev/stdin"))
+            self.assertEqual(item["Type"], "SecureString")
+            self.assertEqual(item["Tier"], "Standard")
+            self.assertFalse(item["Overwrite"])
+        self.assertIn("ya existía y se conservó", output.getvalue())
+        self.assertNotIn(code, output.getvalue())
+        self.assertNotIn(KEY, output.getvalue())
+
+    def test_cli_subprocess_receives_secrets_via_stdin_not_process_arguments(self):
+        with patch.object(webpay.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, b'{"Version":1}')) as cli:
+            webpay.aws("ssm", "put-parameter", "--cli-input-json", "file:///dev/stdin", input_json={"Value": KEY})
+        self.assertNotIn(KEY, repr(cli.call_args.args))
+        self.assertEqual(json.loads(cli.call_args.kwargs["input"]), {"Value": KEY})
+
+    def test_permission_error_is_sanitized_even_if_stderr_contains_credentials(self):
+        denied = subprocess.CalledProcessError(1, "aws", stderr=f"AccessDenied {KEY}".encode())
+        with patch.object(webpay.subprocess, "run", side_effect=denied):
+            with self.assertRaisesRegex(host.RolloutError, "ssm:PutParameter") as blocked:
+                webpay.aws("ssm", "put-parameter")
+        self.assertNotIn(KEY, str(blocked.exception))
 
 
 if __name__ == "__main__":

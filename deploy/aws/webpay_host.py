@@ -124,14 +124,17 @@ def webpay_overrides(source):
     else:
         data = private_file(ENV_FILE.with_name("webpay.credentials")).decode()
         values = env_values(line for line in data.splitlines() if not line.startswith("#"))
-    code = values.get("WEBPAY_COMMERCE_CODE", "")
-    key = values.get("WEBPAY_API_KEY", "")
+    code, key = validate_credentials(values.get("WEBPAY_COMMERCE_CODE", ""), values.get("WEBPAY_API_KEY", ""))
+    return {"WEBPAY_ENABLED": "true", "WEBPAY_COMMERCE_CODE": code,
+            "WEBPAY_API_KEY": key, "WEBPAY_RETURN_URL": RETURN_URL}
+
+
+def validate_credentials(code, key):
     if not re.fullmatch(r"[0-9]{12}", code):
         raise RolloutError("El código de comercio debe tener 12 dígitos.")
     if not re.fullmatch(r"[0-9A-Fa-f]{64}", key):
         raise RolloutError("La API key de integración debe tener 64 caracteres hexadecimales.")
-    return {"WEBPAY_ENABLED": "true", "WEBPAY_COMMERCE_CODE": code,
-            "WEBPAY_API_KEY": key, "WEBPAY_RETURN_URL": RETURN_URL}
+    return code, key
 
 
 class EngineConnection(http.client.HTTPConnection):

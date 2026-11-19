@@ -3,6 +3,7 @@
 
 import argparse
 import base64
+import getpass
 import gzip
 import json
 from pathlib import Path
@@ -10,8 +11,9 @@ import re
 import subprocess
 import sys
 import time
+import warnings
 
-from webpay_host import MODES, RolloutError
+from webpay_host import MODES, PARAMETERS, RolloutError, validate_credentials
 
 REGION = "us-east-1"
 ACCOUNT = "767398096661"
@@ -21,15 +23,44 @@ HOST_SCRIPT = Path(__file__).with_name("webpay_host.py")
 TARGET_ARN = re.compile(r"arn:aws:elasticloadbalancing:us-east-1:[0-9]{12}:targetgroup/[A-Za-z0-9-]+/[a-f0-9]+")
 
 
-def aws(*args):
+def aws(*args, input_json=None):
+    failure = f"Falló AWS CLI para {args[0]} {args[1]}. Revise región, credenciales e IAM."
     try:
         response = subprocess.run(
             ["aws", "--region", REGION, "--no-cli-pager", "--output", "json", *args],
             capture_output=True, check=True, timeout=30,
+            input=None if input_json is None else json.dumps(input_json).encode(),
         )
         return json.loads(response.stdout)
+    except subprocess.CalledProcessError as error:
+        if args[:2] == ("ssm", "put-parameter"):
+            stderr = error.stderr or b""
+            if b"(ParameterAlreadyExists)" in stderr:
+                return {"AlreadyExists": True}
+            if b"AccessDenied" in stderr or b"is not authorized" in stderr:
+                failure = "AWS denegó la creación del parámetro. Revise ssm:PutParameter y los permisos KMS."
+        raise RolloutError(failure) from None
     except (OSError, ValueError, subprocess.SubprocessError):
-        raise RolloutError(f"Falló AWS CLI para {args[0]} {args[1]}. Revise región, credenciales e IAM.") from None
+        raise RolloutError(failure) from None
+
+
+def create_parameters():
+    if sys.platform != "linux" or not sys.stdin.isatty():
+        raise RolloutError("Use una sesión interactiva de CloudShell para ingresar las credenciales con eco desactivado.")
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", getpass.GetPassWarning)
+            code = getpass.getpass("Código de comercio Webpay Plus de integración (oculto): ").strip()
+            key = getpass.getpass("API key Webpay Plus de integración (oculta): ").strip()
+    except (EOFError, getpass.GetPassWarning):
+        raise RolloutError("No se pudo leer desde una terminal con eco desactivado.") from None
+    code, key = validate_credentials(code, key)
+    for name, value in zip(PARAMETERS.values(), (code, key)):
+        response = aws("ssm", "put-parameter", "--cli-input-json", "file:///dev/stdin", input_json={
+            "Name": name, "Value": value, "Type": "SecureString", "Tier": "Standard", "Overwrite": False,
+        })
+        result = "ya existía y se conservó" if response.get("AlreadyExists") else "creado"
+        print(f"{name}: {result}")
 
 
 def private_ip():
@@ -133,6 +164,9 @@ def run_host(mode, source, check_credentials=False):
 def execute(mode, source, requested_target, check_credentials=False):
     if aws("sts", "get-caller-identity").get("Account") != ACCOUNT:
         raise RolloutError(f"La sesión AWS debe corresponder a la cuenta {ACCOUNT}.")
+    if mode == "create-parameters":
+        create_parameters()
+        return
     if requested_target and requested_target.split(":")[4] != ACCOUNT:
         raise RolloutError("El Target Group indicado pertenece a otra cuenta AWS.")
     mutating = mode in {"apply", "rollback", "recover"}
@@ -156,6 +190,8 @@ def main():
     methods = parser.add_mutually_exclusive_group(required=True)
     for mode in MODES:
         methods.add_argument(f"--{mode}", dest="mode", action="store_const", const=mode)
+    methods.add_argument("--create-parameters", dest="mode", action="store_const", const="create-parameters",
+                         help="Crea los dos SecureString desde una terminal interactiva en CloudShell.")
     parser.add_argument("--source", choices=("ssm", "host-file"), default="ssm")
     parser.add_argument("--check-credentials", action="store_true",
                         help="Con --dry-run, comprueba lectura y formato de credenciales sin exponer valores.")

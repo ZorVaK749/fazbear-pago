@@ -65,6 +65,13 @@ Las rutas JWT existentes se mantienen.
 dos parámetros `SecureString` en `us-east-1`, con los valores de integración
 de la [referencia oficial de Transbank](https://github.com/TransbankDevelopers/transbank-developers-docs/blob/master/referencia/webpay/README.md).
 
+Desde una sesión interactiva de CloudShell, ejecutar
+`python3 deploy/aws/webpay.py --create-parameters`. Solicita ambos valores
+con el eco de terminal desactivado. Los entrega por stdin a AWS CLI como
+`SecureString` Standard y conserva parámetros que ya existan. Esta acción
+requiere `ssm:PutParameter` para los dos nombres y usa la clave administrada
+por AWS de Parameter Store. También se pueden crear desde la consola.
+
 | Parámetro | Variable |
 | --- | --- |
 | `/pedidos360/ev3/webpay/commerce-code` | `WEBPAY_COMMERCE_CODE` |
