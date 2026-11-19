@@ -157,22 +157,26 @@ def ssm_request(mode, source, check_credentials=False):
 
 
 def run_host(mode, source, check_credentials=False):
-    request = json.dumps(ssm_request(mode, source, check_credentials))
-    command = aws("ssm", "send-command", "--cli-input-json", request)["Command"]["CommandId"]
+    run_ssm(ssm_request(mode, source, check_credentials), INSTANCE)
+
+
+def run_ssm(request, instance, timeout=480,
+            failure="SSM no completó la operación. Revise el diario con --status."):
+    command = aws("ssm", "send-command", "--cli-input-json", json.dumps(request))["Command"]["CommandId"]
     print(f"SSM Command ID: {command}", flush=True)
-    deadline = time.monotonic() + 480
+    deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         # List handles the short period before the invocation appears without parsing CLI stderr.
-        results = aws("ssm", "list-command-invocations", "--command-id", command, "--instance-id", INSTANCE)
+        results = aws("ssm", "list-command-invocations", "--command-id", command, "--instance-id", instance)
         invocations = results["CommandInvocations"]
         if invocations and invocations[0]["Status"] not in {"Pending", "InProgress", "Delayed", "Cancelling"}:
-            result = aws("ssm", "get-command-invocation", "--command-id", command, "--instance-id", INSTANCE)
+            result = aws("ssm", "get-command-invocation", "--command-id", command, "--instance-id", instance)
             for field in ("StandardOutputContent", "StandardErrorContent"):
                 output = result.get(field, "").strip()
                 if output:
                     print(output, file=sys.stderr if field == "StandardErrorContent" else sys.stdout)
             if result["Status"] != "Success":
-                raise RolloutError("SSM no completó la operación. Revise el diario con --status.")
+                raise RolloutError(failure)
             return
         time.sleep(5)
     raise RolloutError("SSM sigue sin confirmar el resultado. Revise el Command ID antes de reintentar.")

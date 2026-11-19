@@ -191,3 +191,58 @@ python3 -B -m unittest discover -s deploy/aws/tests -v
 GitHub Actions ejecuta estas pruebas aisladas con Docker, AWS y PostgreSQL
 simulados en los límites del script. El workflow de prueba carece de rol AWS
 y los cambios en `deploy/aws` no disparan una publicación GHCR nueva.
+# Cambio de catálogo a CLP
+
+El catálogo de la EV3 pasa a precios enteros en CLP con una equivalencia fija
+de laboratorio de 1.000 CLP por unidad anterior. Los importes históricos de
+pedidos, pagos y cotizaciones se conservan con el valor original registrado.
+Los carritos guardados conservan sus ítems y cantidades y muestran los precios
+vigentes desde Productos.
+
+## Inventario de solo lectura
+
+```bash
+cd "$HOME/pedidos360-ops-pago" &&
+git pull --ff-only origin ev3/webpay-integracion &&
+python3 deploy/aws/clp_inventory.py --service productos
+```
+
+El inventario muestra qué motor usa el contenedor, y si el directorio H2 tiene
+un montaje de escritura. También admite `carrito`, `orden` y `notificaciones`.
+Requiere `ssm:SendCommand` con `AWS-RunShellScript` sobre cada EC2 y
+`ssm:ListCommandInvocations` y `ssm:GetCommandInvocation`. La EC2 debe estar
+administrada por SSM. No se imprimen credenciales ni rutas de conexión.
+
+## Orden del cambio
+
+1. Pausar nuevas compras y cambios en el catálogo durante la ventana. Dejar
+   terminar descuentos de stock en curso. Las cotizaciones nuevas tienen una
+   vigencia configurada en Orden. Esperar que venzan las vigentes del catálogo
+   anterior antes de reabrir compras. Mantener el mecanismo de confirmación
+   para pagos Webpay ya aprobados.
+2. Obtener un respaldo verificable de la fuente real de Productos y contrastar
+   los 23 IDs, precios y cantidades en una restauración aislada. Para H2 usar
+   [el respaldo del catálogo](../../docs/ENTREGA_AWS_EV3.md#respaldo-de-productos).
+   Para PostgreSQL usar un dump consistente y restaurarlo en una base aislada.
+   Si H2 vive solo en la JVM, conservar el contenedor activo hasta verificar
+   una exportación lógica autorizada.
+3. Probar Productos sobre una copia del catálogo antes del corte. Conservar
+   el volumen y la configuración efectiva del servicio y activar
+   `EV3_AWS_CATALOG_MIGRATE_CLP=true` en la nueva imagen. La migración valida
+   nombres y valores esperados, actualiza precios dentro de una transacción
+   y publica los 23 snapshots a través del outbox existente. Un valor distinto
+   de los precios documentados detiene el arranque para revisión.
+4. Desplegar Carrito con `PRODUCTOS_URL` igual al origen de Productos que usa
+   Orden. La EC2 de Carrito debe alcanzar esa URL privada. Desplegar Orden y
+   después Notificaciones, y comprobar salud y Target Groups. Pago, Pedidos,
+   Analytics, Reportes y Fidelización conservan sus contratos actuales.
+5. Desplegar el frontend con `frontend_image.py --apply --image <digest-GHCR>`.
+   Verificar catálogo y carrito preexistente, incluida la Margherita a 12.990
+   CLP. Comparar cada ID y stock con el respaldo antes de reabrir compras.
+   Luego probar Webpay con una nueva cotización y tarjeta oficial de integración.
+
+Conservar las imágenes anteriores y el respaldo. Solo restaurar precios a
+partir del respaldo si todavía no se admitieron nuevas operaciones. Si ya
+hubo compras, conservar los registros y conciliar las operaciones antes
+de decidir una corrección. No se requiere modificar Pago ni la configuración
+de Webpay para este cambio.
