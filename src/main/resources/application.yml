@@ -34,6 +34,11 @@ server:
     include-stacktrace: never
     include-binding-errors: never
 pago:
+  webpay:
+    enabled: ${WEBPAY_ENABLED:false}
+    commerce-code: ${WEBPAY_COMMERCE_CODE:}
+    api-key: ${WEBPAY_API_KEY:}
+    return-url: ${WEBPAY_RETURN_URL:}
   operations:
     remote-enabled: ${PAGO_REMOTE_OPERATIONS_ENABLED:false}
     orden-url: ${ORDEN_URL:http://localhost:8084}

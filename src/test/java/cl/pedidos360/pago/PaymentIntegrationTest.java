@@ -2,6 +2,7 @@ package cl.pedidos360.pago;
 
 import static cl.pedidos360.pago.PaymentModels.*;
 import static org.assertj.core.api.Assertions.*;
+import static org.mockito.Mockito.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
@@ -41,6 +42,8 @@ import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.web.client.RestClient;
+import org.springframework.web.client.ResourceAccessException;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -73,6 +76,7 @@ class PaymentIntegrationTest {
     @Autowired JdbcTemplate jdbc;
     @Autowired PaymentService service;
     @Autowired RefundService refunds;
+    @Autowired TransactionTemplate tx;
     @Autowired ObjectMapper json;
     @LocalServerPort int port;
 
@@ -108,6 +112,61 @@ class PaymentIntegrationTest {
     }
 
     long count(String table) { return jdbc.queryForObject("SELECT count(*) FROM " + table, Long.class); }
+
+    @Test
+    void webpayReservesTheQuoteAndReconcilesALostCommitWithoutAnotherCharge() {
+        var provider = mock(WebpayClient.class);
+        var webpay = new WebpayService(jdbc, tx, provider, service);
+        var operation = operation(ALICE);
+        var token = "testproviderreference000000001";
+        when(provider.create(anyString(), anyString(), eq(12990)))
+                .thenReturn(new WebpayClient.Created(token, WebpayClient.FORM));
+        var redirect = webpay.start(ALICE, operation, "webpay-create");
+        assertThat(webpay.start(ALICE, operation, "webpay-create")).isEqualTo(redirect);
+        verify(provider, times(1)).create(anyString(), anyString(), eq(12990));
+        assertThatThrownBy(() -> service.pay(ALICE, "other-method",
+                new PaymentRequest(operation, "SIMULADO", "sim-approved"))).isInstanceOf(ApiException.class);
+        var returned = new WebpayService.Return(token, null, null, null);
+        assertThatThrownBy(() -> webpay.finish(BOB, returned)).isInstanceOf(ApiException.class);
+        verify(provider, never()).commit(anyString());
+
+        var refs = jdbc.queryForMap("SELECT buy_order,session_id FROM webpay_transaction WHERE payment_id=?", redirect.pagoId());
+        String order = (String) refs.get("buy_order"), session = (String) refs.get("session_id");
+        var amount = new BigDecimal("12990");
+        var initialized = new WebpayClient.Outcome("INITIALIZED", amount, order, session, null);
+        var approved = new WebpayClient.Outcome("AUTHORIZED", amount, order, session, 0);
+        when(provider.status(token)).thenReturn(initialized, initialized, approved);
+        when(provider.commit(token)).thenThrow(new ResourceAccessException("test timeout"));
+
+        assertThat(webpay.finish(ALICE, new WebpayService.Return(null, token, order, session)).estado()).isEqualTo("PENDING");
+        verify(provider, never()).commit(anyString());
+        assertThat(webpay.finish(ALICE, returned).estado()).isEqualTo("APPROVED");
+        assertThat(webpay.finish(ALICE, returned).simulacion()).isFalse();
+        verify(provider, times(1)).commit(token);
+        assertThat(refunds.trusted(redirect.pagoId())).containsEntry("metodo", "WEBPAY_INTEGRACION");
+        assertThat(count("payment_outbox")).isZero();
+    }
+
+    @Test
+    void webpayNeverApprovesAnAmountMismatchOrRetriesAnUncertainCreate() {
+        var provider = mock(WebpayClient.class);
+        var webpay = new WebpayService(jdbc, tx, provider, service);
+        var uncertain = operation(ALICE);
+        when(provider.create(anyString(), anyString(), eq(12990)))
+                .thenThrow(new ResourceAccessException("test timeout"));
+        assertThatThrownBy(() -> webpay.start(ALICE, uncertain, "timed-out")).isInstanceOf(ApiException.class);
+        assertThatThrownBy(() -> webpay.start(ALICE, uncertain, "timed-out")).isInstanceOf(ApiException.class);
+        verify(provider, times(1)).create(anyString(), anyString(), eq(12990));
+
+        var token = "testproviderreference000000002";
+        doReturn(new WebpayClient.Created(token, WebpayClient.FORM)).when(provider).create(anyString(), anyString(), eq(12990));
+        var redirect = webpay.start(ALICE, operation(ALICE), "different-quote");
+        var refs = jdbc.queryForMap("SELECT buy_order,session_id FROM webpay_transaction WHERE payment_id=?", redirect.pagoId());
+        when(provider.status(token)).thenReturn(new WebpayClient.Outcome("AUTHORIZED", BigDecimal.ONE,
+                (String) refs.get("buy_order"), (String) refs.get("session_id"), 0));
+        assertThatThrownBy(() -> webpay.recover(ALICE, redirect.pagoId())).isInstanceOf(ApiException.class);
+        assertThat(refunds.trusted(redirect.pagoId())).containsEntry("estado", "PENDING");
+    }
 
     @Test
     void approvedAmountIsBackendControlledAndPersisted() throws Exception {

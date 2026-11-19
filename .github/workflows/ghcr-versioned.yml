@@ -3,6 +3,7 @@ on:
   push:
     branches:
       - ev3/integracion-integral
+      - ev3/webpay-integracion
     paths-ignore:
       - 'docs/**'
       - 'deploy/ev3-local/**'

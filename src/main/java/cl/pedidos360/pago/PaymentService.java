@@ -61,7 +61,10 @@ public class PaymentService {
         if (operations.isEmpty()) throw new ApiException(404, "OPERATION_NOT_FOUND");
         var operation = operations.getFirst();
         if (Boolean.TRUE.equals(jdbc.queryForObject(
-                "SELECT EXISTS(SELECT 1 FROM payment WHERE operation_id=? AND status IN ('APPROVED','REFUNDED'))",
+                """
+                SELECT EXISTS(SELECT 1 FROM payment WHERE operation_id=? AND
+                  (status IN ('APPROVED','REFUNDED') OR (NOT simulation AND status IN ('CREATING','CREATE_UNKNOWN','PENDING'))))
+                """,
                 Boolean.class, request.operacionId()))) {
             throw new ApiException(409, "OPERATION_ALREADY_APPROVED");
         }

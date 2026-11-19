@@ -27,6 +27,7 @@ public class RefundService {
             return Map.of("reembolsoId", refund.get("id"), "pagoId", paymentId, "importeReembolsado", refund.get("amount"), "simulacion", true);
         }
         var payment = payments.getFirst();
+        if (!Boolean.TRUE.equals(payment.get("simulation"))) throw new ApiException(409, "WEBPAY_REFUND_NOT_ENABLED");
         if (!payment.get("status").equals("APPROVED")) throw new ApiException(409, "PAYMENT_NOT_APPROVED");
         UUID refundId = UUID.randomUUID();
         jdbc.update("INSERT INTO payment_refund(id,payment_id,idempotency_key,amount) VALUES (?,?,?,?)", refundId, paymentId, key, payment.get("amount"));
@@ -42,8 +43,10 @@ public class RefundService {
         if (rows.isEmpty()) throw new ApiException(404, "PAYMENT_NOT_FOUND");
         var p = rows.getFirst();
         BigDecimal refunded = jdbc.queryForObject("SELECT COALESCE(sum(amount),0) FROM payment_refund WHERE payment_id=?", BigDecimal.class, paymentId);
-        return Map.of("pagoId", paymentId, "operacionId", p.get("operation_id"), "tenantId", p.get("tenant_id"),
+        var summary = new java.util.LinkedHashMap<>(Map.of("pagoId", paymentId, "operacionId", p.get("operation_id"), "tenantId", p.get("tenant_id"),
                 "ownerId", p.get("owner_id"), "importe", p.get("amount"), "moneda", p.get("currency"),
-                "estado", p.get("status"), "simulacion", true, "totalReembolsado", refunded);
+                "estado", p.get("status"), "simulacion", p.get("simulation"), "totalReembolsado", refunded));
+        if (!Boolean.TRUE.equals(p.get("simulation"))) summary.put("metodo", "WEBPAY_INTEGRACION");
+        return summary;
     }
 }

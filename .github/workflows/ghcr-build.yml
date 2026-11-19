@@ -13,7 +13,7 @@ permissions:
   packages: write
 jobs:
   image:
-    if: github.ref == 'refs/heads/ev3/integracion-integral'
+    if: github.ref == 'refs/heads/ev3/integracion-integral' || github.ref == 'refs/heads/ev3/webpay-integracion' || github.ref == 'refs/heads/ev3/analytics-extras'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     services:
