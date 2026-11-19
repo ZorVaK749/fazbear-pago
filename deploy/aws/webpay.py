@@ -14,6 +14,7 @@ import time
 from webpay_host import MODES, RolloutError
 
 REGION = "us-east-1"
+ACCOUNT = "767398096661"
 INSTANCE = "i-0241836a7e45a2e3f"
 PORT = 8087
 HOST_SCRIPT = Path(__file__).with_name("webpay_host.py")
@@ -129,6 +130,10 @@ def run_host(mode, source):
 
 
 def execute(mode, source, requested_target):
+    if aws("sts", "get-caller-identity").get("Account") != ACCOUNT:
+        raise RolloutError(f"La sesión AWS debe corresponder a la cuenta {ACCOUNT}.")
+    if requested_target and requested_target.split(":")[4] != ACCOUNT:
+        raise RolloutError("El Target Group indicado pertenece a otra cuenta AWS.")
     mutating = mode in {"apply", "rollback", "recover"}
     try:
         arn, target_id, interval = resolve_target(requested_target)

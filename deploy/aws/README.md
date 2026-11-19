@@ -7,6 +7,8 @@ imagen [verificada en GHCR](https://github.com/ZorVaK749/fazbear-pago/actions/ru
 fijada en `sha256:2e93d9d7b905480c1704bbc31644ba3e2e67410fd1fe0da6ca8c54ac49c61c12`.
 La EC2 debe ser un nodo Linux administrado por SSM y tener Bash, Python, Docker,
 `base64` y `gzip`. La modalidad SecureString también requiere AWS CLI en la EC2.
+Antes de consultar el inventario, el script comprueba con STS que la sesión
+corresponda a la cuenta de laboratorio `767398096661`.
 
 ## Uso
 
@@ -39,6 +41,8 @@ El respaldo y el diario quedan en `/etc/pedidos360/ev3/.webpay-rollout/`, con
 permisos de root. El contenedor anterior queda como
 `ev3-pago-previous-<id>`. Conservar ambos durante la validación.
 Confirmar en el frontend una transacción con Entra y tarjetas de integración.
+La ruta autenticada `GET /api/pagos/webpay/capacidad` responde HTTP 204
+cuando Webpay está habilitado. La respuesta se entrega sin cuerpo.
 El script usa el retorno fijo
 `https://p5gsy16utd.execute-api.us-east-1.amazonaws.com/checkout/webpay`.
 Las rutas JWT existentes se mantienen.

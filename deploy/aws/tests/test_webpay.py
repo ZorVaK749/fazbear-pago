@@ -188,6 +188,27 @@ class RolloutTests(unittest.TestCase):
 
 
 class AwsDispatchTests(unittest.TestCase):
+    def setUp(self):
+        account = patch.object(webpay, "aws", return_value={"Account": webpay.ACCOUNT})
+        account.start()
+        self.addCleanup(account.stop)
+
+    def test_wrong_account_stops_before_elb_or_ssm(self):
+        with patch.object(webpay, "aws", return_value={"Account": "000000000000"}) as aws, \
+             patch.object(webpay, "resolve_target") as resolve, patch.object(webpay, "run_host") as remote:
+            with self.assertRaisesRegex(host.RolloutError, webpay.ACCOUNT):
+                webpay.execute("apply", "ssm", None)
+            aws.assert_called_once_with("sts", "get-caller-identity")
+            resolve.assert_not_called()
+            remote.assert_not_called()
+
+    def test_rejects_target_group_owned_by_another_account(self):
+        arn = "arn:aws:elasticloadbalancing:us-east-1:000000000000:targetgroup/pago/0123456789abcdef"
+        with patch.object(webpay, "resolve_target") as resolve:
+            with self.assertRaisesRegex(host.RolloutError, "otra cuenta"):
+                webpay.execute("dry-run", "ssm", arn)
+            resolve.assert_not_called()
+
     def test_payload_contains_reviewed_source_and_switches_only(self):
         request = webpay.ssm_request("apply", "ssm")
         self.assertEqual(request["InstanceIds"], [webpay.INSTANCE])
