@@ -201,8 +201,13 @@ y su stock se protegen con el procedimiento de la guía base.
 - [x] Aplicar los precios CLP en una copia, comprobar IDs y stock, y confirmar el Target Group healthy.
 - [x] Actualizar Carrito, Orden y Notificaciones por digest y verificar sus Target Groups.
 - [x] Registrar la revisión Fargate `:4` con el digest CLP y comprobar el checkout público actualizado.
-- [ ] Confirmar en ECS el estado estable de la revisión CLP.
+- [ ] Confirmar en ECS el estado estable de la revisión CLP mediante una sesión que pueda usar `ecs:DescribeServices`.
 - [ ] Validar carrito guardado, nueva cotización y pago Webpay en el entorno de integración.
+
+La sesión del laboratorio recibió una denegación explícita de
+`voc-cancel-cred` al consultar el servicio de Fargate. El checkout público
+sigue entregando el botón Webpay y el código CLP. Se reportó que terminó la
+prueba de pago y queda por confirmar el resultado del pedido.
 
 El orden del cambio, el comando de inventario y las condiciones para recuperar
 el despliegue están en la [guía de CLP](../deploy/aws/README.md#cambio-de-catálogo-a-clp).
