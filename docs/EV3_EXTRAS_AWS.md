@@ -33,7 +33,7 @@ pedido correspondiente y quedan fuera de ese ledger académico.
 
 ### Configuración y rutas
 
-- Pago aplica Flyway V3 a PostgreSQL. Orden aplica Flyway V2. En Pedidos H2
+- Pago aplica Flyway V3 y V4 a PostgreSQL. Orden aplica Flyway V2. En Pedidos H2
   y PostgreSQL se usan las columnas existentes. Respaldar previamente los
   tres almacenes. Revisar la matriz de datos y corte de la guía base.
 - Usar `WEBPAY_ENABLED=true` solo tras levantar Pago, Orden, Pedidos y
