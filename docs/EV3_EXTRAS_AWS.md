@@ -133,39 +133,47 @@ del listener y el Target Group de Fidelización antes de publicar cambios
 en el Gateway. La UI informa indisponibilidad de FazCoins sin cambiar la
 verificación de Webpay.
 
-El inventario del stage confirmó las cuatro rutas de Fidelización en
-`integrations/qamokas`. La búsqueda por el puerto 8089 no encontró un Target
-Group. Las búsquedas por nombre de Fidelización y FazCoins no encontraron
-un Target Group, una instancia EC2 etiquetada o un servicio en el clúster
-`pedidos360-ev3-infra`. Queda pendiente asignar una EC2 al microservicio.
+### Estado de Fidelización en AWS
 
-Para desplegarlo, usar la imagen verificada
+Despliegue confirmado en `ec2-frontend` (`i-0644c1d2ca954f9aa`) con
+`deploy/aws/fidelizacion.py --reuse-frontend` en `4524761`. El contenedor
+`ev3-fidelizacion` publica el puerto 8089 y el Target Group
+`fazbear-tg-fidelizacion` enruta `/api/fidelizacion/*` desde el ALB interno.
+El stage `ev3` conserva las cuatro rutas JWT en `integrations/qamokas`.
+
+- [x] Verificar que el checkout público sigue servido por Fargate.
+- [x] Verificar las credenciales dedicadas en `pedidos360-ev3-postgres`.
+- [x] Comprobar desde la EC2 PostgreSQL por TCP/5432, Kafka por TCP/9092 y el health de Pago por HTTP/8087.
+- [x] Confirmar HTTP 200 en `/health` y comprobar el digest del contenedor.
+- [x] Confirmar el Target Group healthy en dos observaciones separadas por al menos 30 s.
+- [ ] Confirmar con sesión iniciada que el checkout muestra saldo, movimientos y recompensas.
+- [ ] Confirmar un movimiento `AWARD` de un pago simulado aprobado en CLP.
+
+Para la validación de solo lectura, abrir el checkout y pulsar
+**Actualizar FazCoins**. Verificar HTTP 200 en saldo, movimientos y
+recompensas. Un saldo cero con recompensas visibles es válido. Revisar los
+movimientos existentes para confirmar un abono sin generar un pedido
+adicional. Un nuevo pedido de prueba debe usar inventario de pruebas.
+
+El despliegue utiliza la imagen verificada
 `ghcr.io/zorvak749/fazbear-fidelizacion@sha256:627283e9b8b68869ecd9ec8498bdf9423e9ef68e13f9f7c052eff486bd33b2c0`
 con el perfil `ev3-aws`. Se puede reutilizar el servidor RDS actual con una
 base y un usuario dedicados a Fidelización, y el broker Kafka de EV3.
 Configurar `FIDELIZACION_DB_URL`, `FIDELIZACION_DB_USER`,
 `FIDELIZACION_DB_PASSWORD`, `KAFKA_BOOTSTRAP_SERVERS`, `PAGO_URL`
 y la clave compartida `INTERNAL_SERVICE_KEY` mediante el entorno privado
-de la EC2. Publicar el puerto 8089 del host hacia el 8080 del contenedor.
-Una vez confirmado `GET /health`, registrar la instancia en un Target Group
-con health check `/health` y enlazar las rutas al destino mediante una regla
-del listener interno. Verificar saldo, movimientos y recompensas con sesión
-iniciada y usar un pago simulado para comprobar el abono de FazCoins.
+de la EC2. El puerto 8089 del host apunta al 8080 del contenedor.
 [CI de Fidelización](https://github.com/ZorVaK749/fazbear-fidelizacion/actions/runs/44362087350)
 
 ### EC2 de Fidelización en AWS Academy
 
-Desde CloudShell, en el clon operativo, comprobar el VPC, la integración JWT
-existente y el listener, y crear una instancia `t3.micro` con créditos
-estándar y un volumen raíz cifrado. El comando reutiliza la subred y el
-perfil SSM de Pago. Si la subred usa IP pública para salir, conserva solo
-los grupos reutilizables que carecen de entrada abierta a internet.
+Desde CloudShell, en el clon operativo, verificar el contenedor, el
+listener y el Target Group de la EC2 en uso.
 
 ```bash
 cd "$HOME/pedidos360-ops-pago" &&
 git pull --ff-only origin ev3/webpay-integracion &&
-python3 deploy/aws/fidelizacion.py --plan &&
-python3 deploy/aws/fidelizacion.py --create-ec2
+python3 deploy/aws/fidelizacion.py --verify --instance-id i-0644c1d2ca954f9aa
 ```
 
 Las instancias `i-05bbd23de4ff0bdea` e `i-082693721a3cda5f9` terminaron
