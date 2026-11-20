@@ -21,10 +21,11 @@ class WebpayReleaseTest(unittest.TestCase):
                 patch.object(cli, "target_state", return_value="healthy"), \
                 patch.object(cli, "run_ssm") as remote, patch.object(cli, "wait_for_target") as health, \
                 redirect_stdout(io.StringIO()):
-            cli.execute("apply", IMAGE)
+            cli.execute("apply", IMAGE, 6)
         request = remote.call_args.args[0]
         self.assertEqual(request["InstanceIds"], [cli.INSTANCE])
         self.assertIn(IMAGE, request["Parameters"]["commands"][-2])
+        self.assertTrue(request["Parameters"]["commands"][-2].endswith(" 6"))
         health.assert_called_once_with("group", cli.INSTANCE, 30, port=8087)
 
     def test_backup_persists_snapshot_without_printing_provider_data(self):

@@ -141,6 +141,23 @@ para terminar la conciliación. Ante un error o estado incierto, conservar
 el registro para evitar un pedido o pago duplicado. El diagnóstico de
 Orden requiere `psql` en su EC2.
 
+La consulta del intento de 25.980 CLP devolvió `PENDING` en Pago,
+`INITIALIZED` en Transbank con referencias coincidentes y una cotización
+sin pedido asociado. El frontend con la vista **Pago efectuado** quedó
+estable en la revisión `:6` de Fargate.
+
+Con Flyway V6, **Verificar el mismo pago** puede cerrar un intento de
+integración como `EXPIRED` después de 30 minutos. Debe seguir pendiente,
+carecer de retorno normal registrado y responder `INITIALIZED` sin código
+de resultado, con monto y referencias coincidentes. Se conserva el
+historial del intento. El checkout ofrece volver para una nueva cotización
+cuando recibe `EXPIRED`.
+
+Para instalar el cambio de Pago, usar `webpay_release.py --apply
+--migration 6 --image` con el digest publicado. El comando comprueba
+Flyway V5 antes del cambio, guarda un respaldo y valida V6 y el Target
+Group al terminar.
+
 El catálogo de FazCoins conserva los endpoints protegidos de Fidelización.
 Si un GET autenticado recibe `404 Ruta no encontrada`, comprobar la regla
 del listener y el Target Group de Fidelización antes de publicar cambios

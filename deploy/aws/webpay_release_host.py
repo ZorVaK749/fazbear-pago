@@ -12,18 +12,20 @@ from clp_backends_host import Backend, MODES
 from webpay_host import CONTAINER, ENABLED_MODE, IMAGE, RolloutError, postgres_env, run, write_private
 
 PACKAGE = IMAGE.split("@", 1)[0]
+V5_IMAGE = PACKAGE + "@sha256:f1c7dc048ab725b16e585d49d0442d7850a2af4625c11e97740c949734ebf608"
 BACKUP_TABLES = ("fixture_operation", "payment", "webpay_transaction", "idempotency_record", "flyway_schema_history")
 
 
 class WebpayRelease(Backend):
-    def __init__(self, address, image):
+    def __init__(self, address, image, migration=5):
         super().__init__("pago", address, address, (8087, "/health", image))
+        self.migration = migration
         self.state_dir = Path("/var/lib/pedidos360-webpay-release")
         self.journal = self.state_dir / "current.json"
 
     def preflight(self):
         old, config = super().preflight()
-        if (old["Name"] != "/" + CONTAINER or old["Config"]["Image"] not in {IMAGE, self.image}
+        if (old["Name"] != "/" + CONTAINER or old["Config"]["Image"] not in {IMAGE, V5_IMAGE, self.image}
                 or self.mode() != ENABLED_MODE):
             raise RolloutError("El contenedor o la modalidad de Pago no coincide con el despliegue Webpay esperado.")
         if old["Config"]["Image"] == IMAGE:
@@ -45,12 +47,13 @@ class WebpayRelease(Backend):
         data = run(["psql", "-X", "-w", "-qAt", "-v", "ON_ERROR_STOP=1", "-c", f"SELECT json_build_object({fields});"],
                    "No se pudo respaldar el registro de pagos con psql.", env=env, timeout=25)
         snapshot = json.loads(data)
+        previous = str(self.migration - 1)
         if (not isinstance(snapshot, dict) or set(snapshot) != set(BACKUP_TABLES)
                 or not all(isinstance(rows, list) for rows in snapshot.values())
-                or not any(str(row.get("version")) == "4" and row.get("success")
+                or not any(str(row.get("version")) == previous and row.get("success")
                            for row in snapshot["flyway_schema_history"])):
-            raise RolloutError("El respaldo de pagos no contiene las tablas y la migración V4 esperadas.")
-        path = self.state_dir / f"pago-before-v5-{uuid.uuid4().hex[:12]}.json"
+            raise RolloutError(f"El respaldo de pagos no contiene las tablas y la migración V{previous} esperadas.")
+        path = self.state_dir / f"pago-before-v{self.migration}-{uuid.uuid4().hex[:12]}.json"
         write_private(path, data)
         digest = hashlib.sha256(data).hexdigest()
         if hashlib.sha256(path.read_bytes()).hexdigest() != digest:
@@ -66,18 +69,20 @@ class WebpayRelease(Backend):
             return
         env = postgres_env(current["Config"]["Env"])
         result = run(["psql", "-X", "-w", "-qAt", "-v", "ON_ERROR_STOP=1", "-c",
-                      "SELECT EXISTS (SELECT 1 FROM flyway_schema_history WHERE version='5' AND success);"],
-                     "No se pudo comprobar Flyway V5 en Pago.", env=env, timeout=12)
+                      f"SELECT EXISTS (SELECT 1 FROM flyway_schema_history WHERE version='{self.migration}' AND success);"],
+                     f"No se pudo comprobar Flyway V{self.migration} en Pago.", env=env, timeout=12)
         if result.strip() != b"t":
-            raise RolloutError("Pago todavía no confirmó Flyway V5.")
-        print("Pago · Flyway V5 · Webpay de integración activo.")
+            raise RolloutError(f"Pago todavía no confirmó Flyway V{self.migration}.")
+        print(f"Pago · Flyway V{self.migration} · Webpay de integración activo.")
 
 
 def main(args):
     os.umask(0o077)
-    mode, address, image = args
     try:
-        host = WebpayRelease(address, image)
+        mode, address, image, migration = args
+        if migration not in {"5", "6"}:
+            raise RolloutError("Migración de Pago no admitida.")
+        host = WebpayRelease(address, image, int(migration))
         if mode == "status":
             host.status()
         elif mode == "dry-run":

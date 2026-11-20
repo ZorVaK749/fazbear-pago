@@ -182,6 +182,33 @@ class PaymentIntegrationTest {
         mock.verify();
     }
 
+    @Test
+    void webpayExpiresAnOldUnreturnedAttemptOnlyWhenProviderReferencesMatch() {
+        var provider = mock(WebpayClient.class);
+        var webpay = new WebpayService(jdbc, tx, provider, service);
+        String token = "testproviderreference000000004";
+        when(provider.create(anyString(), anyString(), eq(12990)))
+                .thenReturn(new WebpayClient.Created(token, WebpayClient.FORM));
+        var payment = webpay.start(ALICE, operation(ALICE), "expire-unreturned").pagoId();
+        var refs = jdbc.queryForMap("SELECT buy_order,session_id FROM webpay_transaction WHERE payment_id=?", payment);
+        String order = (String) refs.get("buy_order"), session = (String) refs.get("session_id");
+        var initialized = new WebpayClient.Outcome("INITIALIZED", new BigDecimal("12990"), order, session, null);
+        when(provider.status(token)).thenReturn(initialized);
+        assertThat(webpay.recover(ALICE, payment).estado()).isEqualTo("PENDING");
+
+        jdbc.update("UPDATE payment SET created_at=clock_timestamp() - interval '31 minutes' WHERE id=?", payment);
+        when(provider.status(token)).thenReturn(new WebpayClient.Outcome("INITIALIZED", new BigDecimal("12991"), order, session, null));
+        assertThatThrownBy(() -> webpay.recover(ALICE, payment))
+                .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.code).isEqualTo("WEBPAY_RESPONSE_MISMATCH"));
+        assertThat(service.get(ALICE, payment).estado()).isEqualTo("PENDING");
+
+        when(provider.status(token)).thenReturn(initialized);
+        assertThat(webpay.recover(ALICE, payment).estado()).isEqualTo("EXPIRED");
+        assertThat(webpay.finish(ALICE, new WebpayService.Return(token, null, null, null)).estado()).isEqualTo("EXPIRED");
+        assertThat(count("webpay_transaction")).isEqualTo(1);
+        verify(provider, never()).commit(anyString());
+    }
+
     private static void expectProvider(MockRestServiceServer mock, String url, HttpMethod verb, ResponseCreator response) {
         mock.expect(requestTo(url)).andExpect(method(verb)).andRespond(response);
     }

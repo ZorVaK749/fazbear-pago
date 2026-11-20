@@ -156,7 +156,8 @@ class WebpayService {
         return tx.execute(status -> {
             db.execute("SET LOCAL lock_timeout = '5s'");
             var rows = db.queryForList("""
-                    SELECT p.status,p.amount,w.buy_order,w.session_id,w.provider_token,w.browser_return_received
+                    SELECT p.status,p.amount,w.buy_order,w.session_id,w.provider_token,w.browser_return_received,
+                           p.created_at < clock_timestamp() - interval '30 minutes' AS past_integration_window
                     FROM payment p JOIN webpay_transaction w ON w.payment_id=p.id
                     WHERE p.id=? AND p.tenant_id=? AND p.owner_id=? FOR UPDATE OF p
                     """, id, owner.tenant(), owner.oid());
@@ -170,6 +171,11 @@ class WebpayService {
                 } else if ("REVERSED".equals(result.status()) || "NULLIFIED".equals(result.status())
                         || ("FAILED".equals(result.status()) && result.responseCode() != null && result.responseCode() != 0)) {
                     db.update("UPDATE payment SET status='DECLINED' WHERE id=?", id);
+                } else if (mode == Confirmation.RESUME && "INITIALIZED".equals(result.status())
+                        && result.responseCode() == null && Boolean.FALSE.equals(saved.get("browser_return_received"))
+                        && Boolean.TRUE.equals(saved.get("past_integration_window"))) {
+                    // The sandbox return window has elapsed. Record a local expiration, never a provider authorization.
+                    db.update("UPDATE payment SET status='EXPIRED' WHERE id=?", id);
                 }
             }
             return payments.get(owner, id);

@@ -13,7 +13,7 @@ from webpay_release_host import MODES, PACKAGE
 MODULES = ("webpay_host", "clp_inventory_host", "clp_backends_host", "webpay_release_host")
 
 
-def execute(mode, image):
+def execute(mode, image, migration=5):
     if aws("sts", "get-caller-identity")["Account"] != ACCOUNT:
         raise RolloutError(f"La sesión AWS debe corresponder a la cuenta {ACCOUNT}.")
     address = str(IPv4Address(private_ip(INSTANCE)))
@@ -24,7 +24,7 @@ def execute(mode, image):
         if mode in {"dry-run", "apply"} and initial != "healthy":
             raise RolloutError("Pago debe estar healthy antes del cambio.")
     request = python_request(INSTANCE, f"Pedidos360 Pago release {mode}", MODULES,
-                             (mode, address, image), 360 if mode == "apply" else 160)
+                             (mode, address, image, str(migration)), 360 if mode == "apply" else 160)
     run_ssm(request, INSTANCE, timeout=440 if mode == "apply" else 210,
             failure="Operación incompleta en Pago. Consulte --status con el mismo digest y el Command ID.")
     if mode in {"apply", "verify", "recover"}:
@@ -37,11 +37,12 @@ def main():
     for mode in MODES:
         flags.add_argument(f"--{mode}", dest="mode", action="store_const", const=mode)
     parser.add_argument("--image", required=True)
+    parser.add_argument("--migration", type=int, choices=(5, 6), default=5)
     args = parser.parse_args()
     if not re.fullmatch(re.escape(PACKAGE) + r"@sha256:[a-f0-9]{64}", args.image):
         parser.error("--image requiere el digest GHCR del servicio Pago")
     try:
-        execute(args.mode, args.image)
+        execute(args.mode, args.image, args.migration)
     except RolloutError as error:
         print(f"ERROR: {error}", file=sys.stderr)
         return 1
