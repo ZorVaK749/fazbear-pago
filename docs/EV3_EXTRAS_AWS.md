@@ -214,6 +214,20 @@ python3 deploy/aws/fidelizacion.py --allow-rds --instance-id i-0644c1d2ca954f9aa
 python3 deploy/aws/fidelizacion.py --reuse-frontend
 ```
 
+Si la prueba de dependencias confirma RDS y Kafka pero falta el health
+privado de Pago, autorizar `TCP/8087` desde el grupo exclusivo de
+Fidelización. `--allow-pago` conserva los grupos y el contenedor de Pago.
+Utiliza un grupo de Pago exclusivo si ya recibe tráfico del ALB en ese
+puerto. En su defecto, crea un grupo exclusivo para esta conexión y quita
+sus reglas de salida predeterminadas antes de asociarlo a Pago. El perfil
+del operador debe poder consultar y actualizar los grupos EC2. Si hace
+falta un grupo nuevo, también requiere `ec2:RevokeSecurityGroupEgress`.
+
+```bash
+python3 deploy/aws/fidelizacion.py --allow-pago --instance-id i-0644c1d2ca954f9aa &&
+python3 deploy/aws/fidelizacion.py --reuse-frontend
+```
+
 Para reintentar con el laboratorio activo, indicar el ID de la instancia
 que se confirmó terminada. `--retry-ec2` conserva una instancia dedicada
 existente o solicita una sola EC2 por ID anterior y espera que arranque.

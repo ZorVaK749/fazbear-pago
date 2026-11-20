@@ -13,7 +13,7 @@ import warnings
 from clp_productos import python_request
 from fidelizacion_host import PARAMETER, PORT, validate_config
 from frontend_image import FAMILY as FRONTEND_SERVICE, verify_checkout
-from webpay import ACCOUNT, INSTANCE as PAGO, RolloutError, aws, private_ip, run_ssm, wait_for_target
+from webpay import ACCOUNT, INSTANCE as PAGO, PORT as PAGO_PORT, RolloutError, aws, private_ip, run_ssm, wait_for_target
 
 NAME = "fazbear-fidelizacion"
 PROJECT = "Pedidos360-EV3"
@@ -41,6 +41,7 @@ finally:
 print(f"En la sesión interactiva de Pago, ejecute: sudo python3 {path}", flush=True)
 """.strip()
 GROUP = "fazbear-fidelizacion-alb"
+PAGO_GROUP = "fazbear-pago-desde-fidelizacion"
 TG = "fazbear-tg-fidelizacion"
 API = "uuzifgcyd2"
 PATH = "/api/fidelizacion/*"
@@ -281,7 +282,7 @@ def database_command(*arguments, stage=False):
                    failure="La operación de PostgreSQL quedó pendiente. Revise la salida de SSM.")
 
 
-def source_allows_postgres(group, port, sources):
+def source_allows_port(group, port, sources):
     return any(
         (rule["IpProtocol"] == "-1" or (rule["IpProtocol"] in {"tcp", "6"} and rule["FromPort"] <= port <= rule["ToPort"]))
         and any(pair["GroupId"] in sources for pair in rule.get("UserIdGroupPairs", []))
@@ -289,15 +290,31 @@ def source_allows_postgres(group, port, sources):
     )
 
 
-def allow_rds(node, pago):
+def group_instances(group_id):
+    interfaces = aws("ec2", "describe-network-interfaces", "--filters", f"Name=group-id,Values={group_id}")["NetworkInterfaces"]
+    return {eni.get("Attachment", {}).get("InstanceId") for eni in interfaces}
+
+
+def fidelizacion_source(node, pago):
     instance_id = require_running(node)
     node_groups = [group["GroupId"] for group in node["SecurityGroups"]]
     sources = aws("ec2", "describe-security-groups", "--group-ids", *node_groups)["SecurityGroups"]
     source = one([g for g in sources if g["GroupName"] == GROUP and g["VpcId"] == pago["VpcId"]],
                  "El grupo dedicado de Fidelización debe estar asociado a su EC2.")["GroupId"]
-    interfaces = aws("ec2", "describe-network-interfaces", "--filters", f"Name=group-id,Values={source}")["NetworkInterfaces"]
-    if not interfaces or any(eni.get("Attachment", {}).get("InstanceId") != instance_id for eni in interfaces):
+    if group_instances(source) != {instance_id}:
         raise RolloutError("El grupo de origen no es exclusivo de la EC2 de Fidelización.")
+    return source
+
+
+def authorize_tcp(target, source, port, description):
+    aws("ec2", "authorize-security-group-ingress", input_json={"GroupId": target, "IpPermissions": [{
+        "IpProtocol": "tcp", "FromPort": port, "ToPort": port,
+        "UserIdGroupPairs": [{"GroupId": source, "Description": description}],
+    }]})
+
+
+def allow_rds(node, pago):
+    source = fidelizacion_source(node, pago)
 
     rds = json.loads(database_command("rds-network"))
     databases = aws("rds", "describe-db-instances")["DBInstances"]
@@ -311,19 +328,75 @@ def allow_rds(node, pago):
     if not attached:
         raise RolloutError("El RDS no tiene grupos de seguridad activos.")
     groups = aws("ec2", "describe-security-groups", "--group-ids", *sorted(attached))["SecurityGroups"]
-    if any(source_allows_postgres(group, port, {source}) for group in groups):
+    if any(source_allows_port(group, port, {source}) for group in groups):
         print(f"RDS TCP/{port} · acceso de {source} ya autorizado.", flush=True)
         return
     shared = {group["VpcSecurityGroupId"] for db in databases if db is not instance for group in db["VpcSecurityGroups"]}
     exclusive = [group for group in groups if group["GroupId"] not in shared]
     pago_groups = {group["GroupId"] for group in pago["SecurityGroups"]}
-    preferred = [group for group in exclusive if source_allows_postgres(group, port, pago_groups)]
+    preferred = [group for group in exclusive if source_allows_port(group, port, pago_groups)]
     target = one(preferred or exclusive, "El RDS no tiene un grupo de seguridad exclusivo e inequívoco para el cambio.")["GroupId"]
-    aws("ec2", "authorize-security-group-ingress", input_json={"GroupId": target, "IpPermissions": [{
-        "IpProtocol": "tcp", "FromPort": port, "ToPort": port,
-        "UserIdGroupPairs": [{"GroupId": source, "Description": "EV3 Fidelizacion a PostgreSQL"}],
-    }]})
+    authorize_tcp(target, source, port, "EV3 Fidelizacion a PostgreSQL")
     print(f"RDS TCP/{port} · acceso autorizado de {source} a {target}.", flush=True)
+
+
+def pago_security_group(pago, source):
+    filters = (f"Name=vpc-id,Values={pago['VpcId']}", f"Name=group-name,Values={PAGO_GROUP}")
+    found = aws("ec2", "describe-security-groups", "--filters", *filters)["SecurityGroups"]
+    if not found:
+        target = aws("ec2", "create-security-group", "--group-name", PAGO_GROUP, "--vpc-id", pago["VpcId"],
+                     "--description", "EV3 Fidelizacion a Pago por TCP 8087")["GroupId"]
+        found = aws("ec2", "describe-security-groups", "--group-ids", target)["SecurityGroups"]
+    group = one(found, "El grupo exclusivo de Pago no aparece de forma inequívoca.")
+    target = group["GroupId"]
+    owners = group_instances(target)
+    incoming = group["IpPermissions"]
+    if owners - {PAGO} or any(
+        rule["IpProtocol"] != "tcp" or rule["FromPort"] != PAGO_PORT or rule["ToPort"] != PAGO_PORT
+        or {p["GroupId"] for p in rule.get("UserIdGroupPairs", [])} != {source}
+        or rule.get("IpRanges") or rule.get("Ipv6Ranges") or rule.get("PrefixListIds") for rule in incoming
+    ):
+        raise RolloutError("El grupo reservado de Pago tiene destinos o reglas ajenas al despliegue.")
+    outbound = group["IpPermissionsEgress"]
+    if outbound:
+        if owners or any(
+            rule["IpProtocol"] != "-1" or rule.get("UserIdGroupPairs") or rule.get("PrefixListIds")
+            or any(entry["CidrIp"] != "0.0.0.0/0" for entry in rule.get("IpRanges", []))
+            or any(entry["CidrIpv6"] != "::/0" for entry in rule.get("Ipv6Ranges", [])) for rule in outbound
+        ):
+            raise RolloutError("El grupo reservado de Pago tiene reglas de salida que requieren revisión.")
+        aws("ec2", "revoke-security-group-egress", input_json={"GroupId": target, "IpPermissions": outbound})
+        current = one(aws("ec2", "describe-security-groups", "--group-ids", target)["SecurityGroups"],
+                      "No se pudo comprobar el grupo reservado de Pago.")
+        if current["IpPermissionsEgress"]:
+            raise RolloutError("AWS aún no confirma que el grupo reservado de Pago carezca de reglas de salida.")
+    if not incoming:
+        authorize_tcp(target, source, PAGO_PORT, "EV3 Fidelizacion a Pago")
+    return target
+
+
+def allow_pago(node, pago, alb):
+    if require_running(pago) != PAGO:
+        raise RolloutError("La instancia de destino debe ser la EC2 de Pago de EV3.")
+    source = fidelizacion_source(node, pago)
+    group_ids = {group["GroupId"] for group in pago["SecurityGroups"]}
+    groups = aws("ec2", "describe-security-groups", "--group-ids", *sorted(group_ids))["SecurityGroups"]
+    if any(source_allows_port(group, PAGO_PORT, {source}) for group in groups):
+        print(f"Pago TCP/{PAGO_PORT} · acceso de {source} ya autorizado.", flush=True)
+        return
+    candidates = [g for g in groups if source_allows_port(g, PAGO_PORT, set(alb["SecurityGroups"]))
+                  and group_instances(g["GroupId"]) == {PAGO}]
+    if len(candidates) == 1:
+        target = candidates[0]["GroupId"]
+        authorize_tcp(target, source, PAGO_PORT, "EV3 Fidelizacion a Pago")
+    else:
+        target = pago_security_group(pago, source)
+        current = one(instances(**{"instance-id": PAGO}), "No se pudo volver a consultar los grupos de Pago.")
+        require_running(current)
+        group_ids = {group["GroupId"] for group in current["SecurityGroups"]}
+        if target not in group_ids:
+            aws("ec2", "modify-instance-attribute", "--instance-id", PAGO, "--groups", *sorted(group_ids | {target}))
+    print(f"Pago TCP/{PAGO_PORT} · acceso autorizado de {source} a {target}.", flush=True)
 
 
 def check_frontend_traffic(node):
@@ -455,14 +528,14 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     flags = parser.add_mutually_exclusive_group(required=True)
     for mode in ("plan", "create-ec2", "inspect-db", "prepare-db", "prepare-db-admin", "stage-db-admin", "allow-rds",
-                 "set-config", "deploy", "verify", "reuse-frontend"):
+                 "allow-pago", "set-config", "deploy", "verify", "reuse-frontend"):
         flags.add_argument("--" + mode, dest="mode", action="store_const", const=mode)
     flags.add_argument("--retry-ec2", metavar="INSTANCE_ID", help="Reintenta después de una EC2 terminada y espera su arranque.")
     parser.add_argument("--instance-id", metavar="INSTANCE_ID", help="Selecciona la EC2 ya creada por ID en lugar de buscarla por etiqueta.")
     args = parser.parse_args()
-    if args.instance_id and (args.mode not in {"prepare-db", "allow-rds", "deploy", "verify"}
+    if args.instance_id and (args.mode not in {"prepare-db", "allow-rds", "allow-pago", "deploy", "verify"}
                              or not re.fullmatch(r"i-[0-9a-f]{17}", args.instance_id)):
-        parser.error("--instance-id requiere un ID de EC2 válido y --prepare-db, --allow-rds, --deploy o --verify.")
+        parser.error("--instance-id requiere un ID válido y --prepare-db, --allow-rds, --allow-pago, --deploy o --verify.")
     try:
         if aws("sts", "get-caller-identity")["Account"] != ACCOUNT:
             raise RolloutError(f"La sesión debe corresponder al laboratorio {ACCOUNT}.")
@@ -487,6 +560,8 @@ def main():
             prepare_database(node)
         elif args.mode == "allow-rds":
             allow_rds(node, pago)
+        elif args.mode == "allow-pago":
+            allow_pago(node, pago, alb)
         elif args.mode == "reuse-frontend":
             reuse_frontend(pago, listener, alb, node)
         elif args.mode in {"deploy", "verify"}:

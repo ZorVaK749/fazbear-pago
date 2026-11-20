@@ -232,6 +232,40 @@ class FidelizacionTest(unittest.TestCase):
                 host.check_dependencies(config, "192.0.2.5")
         self.assertNotIn("example.test", str(error.exception))
 
+    def test_pago_network_reuses_the_exclusive_group_that_already_serves_its_alb(self):
+        pago = {"InstanceId": fidelizacion.PAGO, "State": {"Name": "running"}, "VpcId": "vpc-test",
+                "SecurityGroups": [{"GroupId": "sg-pago"}, {"GroupId": "sg-shared"}]}
+        listener_rule = {"IpProtocol": "tcp", "FromPort": 8087, "ToPort": 8087,
+                         "UserIdGroupPairs": [{"GroupId": "sg-alb"}]}
+        groups = {"SecurityGroups": [{"GroupId": "sg-pago", "IpPermissions": [listener_rule]},
+                                    {"GroupId": "sg-shared", "IpPermissions": [listener_rule]}]}
+        with patch.object(fidelizacion, "fidelizacion_source", return_value="sg-app"), \
+                patch.object(fidelizacion, "group_instances", side_effect=[{fidelizacion.PAGO}, {"i-other"}]), \
+                patch.object(fidelizacion, "aws", side_effect=[groups, {}]) as aws, redirect_stdout(io.StringIO()):
+            fidelizacion.allow_pago({}, pago, {"SecurityGroups": ["sg-alb"]})
+        rule = aws.call_args.kwargs["input_json"]
+        self.assertEqual(aws.call_args.args, ("ec2", "authorize-security-group-ingress"))
+        self.assertEqual(rule["GroupId"], "sg-pago")
+        self.assertEqual(rule["IpPermissions"], [{"IpProtocol": "tcp", "FromPort": 8087, "ToPort": 8087,
+                         "UserIdGroupPairs": [{"GroupId": "sg-app", "Description": "EV3 Fidelizacion a Pago"}]}])
+
+    def test_pago_network_new_group_revokes_default_outbound_before_association(self):
+        pago = {"InstanceId": fidelizacion.PAGO, "State": {"Name": "running"}, "VpcId": "vpc-test",
+                "SecurityGroups": [{"GroupId": "sg-original"}]}
+        outbound = [{"IpProtocol": "-1", "IpRanges": [{"CidrIp": "0.0.0.0/0"}]}]
+        group = {"GroupId": "sg-new", "IpPermissions": [], "IpPermissionsEgress": outbound}
+        results = [{"SecurityGroups": [{"GroupId": "sg-original", "IpPermissions": []}]},
+                   {"SecurityGroups": []}, {"GroupId": "sg-new"}, {"SecurityGroups": [group]},
+                   {"NetworkInterfaces": []}, {}, {"SecurityGroups": [dict(group, IpPermissionsEgress=[])]}, {}, {}]
+        with patch.object(fidelizacion, "fidelizacion_source", return_value="sg-app"), \
+                patch.object(fidelizacion, "instances", return_value=[pago]), \
+                patch.object(fidelizacion, "aws", side_effect=results) as aws, redirect_stdout(io.StringIO()):
+            fidelizacion.allow_pago({}, pago, {"SecurityGroups": ["sg-alb"]})
+        self.assertEqual(aws.call_args_list[-4].args, ("ec2", "revoke-security-group-egress"))
+        self.assertEqual(aws.call_args_list[-4].kwargs["input_json"], {"GroupId": "sg-new", "IpPermissions": outbound})
+        self.assertEqual(aws.call_args.args, ("ec2", "modify-instance-attribute", "--instance-id",
+                                             fidelizacion.PAGO, "--groups", "sg-new", "sg-original"))
+
     def test_dedicated_tls_database_and_kafka_endpoints(self):
         config = {"FIDELIZACION_DB_URL": "jdbc:postgresql://db.example.test:5432/fidelizacion?sslmode=require",
                   "FIDELIZACION_DB_USER": "fidelizacion", "FIDELIZACION_DB_PASSWORD": "test-only",
