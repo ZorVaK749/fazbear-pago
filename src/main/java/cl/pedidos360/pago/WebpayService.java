@@ -10,15 +10,19 @@ import java.sql.Timestamp;
 import java.util.HexFormat;
 import java.util.Map;
 import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.client.RestClientException;
+import org.springframework.web.client.RestClientResponseException;
 
 @Service
 @ConditionalOnProperty(name = "pago.webpay.enabled", havingValue = "true")
 class WebpayService {
+    private static final Logger log = LoggerFactory.getLogger(WebpayService.class);
     private final JdbcTemplate db;
     private final TransactionTemplate tx;
     private final WebpayClient provider;
@@ -38,6 +42,8 @@ class WebpayService {
         @Override public String toString() { return "Webpay return"; }
     }
     private record Reservation(UUID payment, String order, String session, int amount, boolean created) {}
+    private record MatchedReturn(UUID payment, boolean firstNormalReturn) {}
+    private enum Confirmation { DIRECT, RESUME, STATUS_ONLY }
 
     Redirect start(Owner owner, UUID operation, String key) {
         if (key == null || !key.matches("[A-Za-z0-9._:-]{1,128}")) throw new ApiException(400, "INVALID_IDEMPOTENCY_KEY");
@@ -116,10 +122,12 @@ class WebpayService {
         String token = returned.tokenWs() != null ? returned.tokenWs() : returned.tbkToken();
         if (token != null ? !validToken(token) : !validReturnReference(returned))
             throw new ApiException(400, "INVALID_WEBPAY_RETURN");
-        return tx.execute(status -> {
+        // Persist the authenticated browser return before calling the provider. A failed HTTP
+        // exchange must not erase the evidence needed to resume by the public payment ID.
+        MatchedReturn matched = tx.execute(status -> {
             db.execute("SET LOCAL lock_timeout = '5s'");
             String query = """
-                    SELECT p.id,p.status,p.amount,w.buy_order,w.session_id,w.provider_token
+                    SELECT p.id,p.status,w.browser_return_received
                     FROM payment p JOIN webpay_transaction w ON w.payment_id=p.id
                     WHERE p.tenant_id=? AND p.owner_id=? AND
                     """;
@@ -130,49 +138,78 @@ class WebpayService {
             if (rows.isEmpty()) throw new ApiException(404, "PAYMENT_NOT_FOUND");
             var saved = rows.getFirst();
             UUID id = (UUID) saved.get("id");
-            if (!"PENDING".equals(saved.get("status"))) return payments.get(owner, id);
-            return reconcile(owner, saved, returned.tokenWs() != null);
+            boolean first = returned.tokenWs() != null && "PENDING".equals(saved.get("status"))
+                    && !Boolean.TRUE.equals(saved.get("browser_return_received"));
+            if (first) db.update("UPDATE webpay_transaction SET browser_return_received=true WHERE payment_id=?", id);
+            return new MatchedReturn(id, first);
         });
+        Confirmation mode = matched.firstNormalReturn() ? Confirmation.DIRECT
+                : returned.tokenWs() != null ? Confirmation.RESUME : Confirmation.STATUS_ONLY;
+        return reconcile(owner, matched.payment(), mode);
     }
 
     Payment recover(Owner owner, UUID id) {
+        return reconcile(owner, id, Confirmation.RESUME);
+    }
+
+    private Payment reconcile(Owner owner, UUID id, Confirmation mode) {
         return tx.execute(status -> {
             db.execute("SET LOCAL lock_timeout = '5s'");
             var rows = db.queryForList("""
-                    SELECT p.id,p.status,p.amount,w.buy_order,w.session_id,w.provider_token
+                    SELECT p.status,p.amount,w.buy_order,w.session_id,w.provider_token,w.browser_return_received
                     FROM payment p JOIN webpay_transaction w ON w.payment_id=p.id
                     WHERE p.id=? AND p.tenant_id=? AND p.owner_id=? FOR UPDATE OF p
                     """, id, owner.tenant(), owner.oid());
             if (rows.isEmpty()) throw new ApiException(404, "PAYMENT_NOT_FOUND");
-            return "PENDING".equals(rows.getFirst().get("status"))
-                    ? reconcile(owner, rows.getFirst(), false) : payments.get(owner, id);
+            var saved = rows.getFirst();
+            if ("PENDING".equals(saved.get("status"))) {
+                var result = resolve(saved, mode);
+                if (!validOutcome(saved, result)) throw new ApiException(502, "WEBPAY_RESPONSE_MISMATCH");
+                if ("AUTHORIZED".equals(result.status()) && Integer.valueOf(0).equals(result.responseCode())) {
+                    db.update("UPDATE payment SET status='APPROVED' WHERE id=?", id);
+                } else if ("REVERSED".equals(result.status()) || "NULLIFIED".equals(result.status())
+                        || ("FAILED".equals(result.status()) && result.responseCode() != null && result.responseCode() != 0)) {
+                    db.update("UPDATE payment SET status='DECLINED' WHERE id=?", id);
+                }
+            }
+            return payments.get(owner, id);
         });
     }
 
-    private Payment reconcile(Owner owner, Map<String, Object> saved, boolean commit) {
-        UUID id = (UUID) saved.get("id");
-        // Only a normal browser return initiates commit. Abort and recovery only query status.
-        var result = resolve((String) saved.get("provider_token"), commit);
-        if (!validOutcome(saved, result)) throw new ApiException(502, "WEBPAY_RESPONSE_MISMATCH");
-        if ("AUTHORIZED".equals(result.status()) && Integer.valueOf(0).equals(result.responseCode())) {
-            db.update("UPDATE payment SET status='APPROVED' WHERE id=?", id);
-        } else if ("FAILED".equals(result.status()) && result.responseCode() != null && result.responseCode() != 0) {
-            db.update("UPDATE payment SET status='DECLINED' WHERE id=?", id);
+    private WebpayClient.Outcome resolve(Map<String, Object> saved, Confirmation mode) {
+        String token = (String) saved.get("provider_token");
+        if (mode == Confirmation.DIRECT) return commitOrReadStatus(token);
+        var current = readStatus(token);
+        if (mode == Confirmation.RESUME && Boolean.TRUE.equals(saved.get("browser_return_received"))
+                && validOutcome(saved, current) && "INITIALIZED".equals(current.status())) {
+            return commitOrReadStatus(token);
         }
-        return payments.get(owner, id);
+        return current;
     }
 
-    private WebpayClient.Outcome resolve(String token, boolean commit) {
+    private WebpayClient.Outcome commitOrReadStatus(String token) {
         try {
-            var current = provider.status(token);
-            if (commit && current != null && "INITIALIZED".equals(current.status())) {
-                try { return provider.commit(token); }
-                catch (RestClientException uncertain) { return provider.status(token); }
-            }
-            return current;
+            var outcome = provider.commit(token);
+            if (outcome != null) return outcome;
+        } catch (RestClientException uncertain) {
+            logFailure("commit", uncertain);
+        }
+        return readStatus(token);
+    }
+
+    private WebpayClient.Outcome readStatus(String token) {
+        try {
+            return provider.status(token);
         } catch (RestClientException e) {
+            logFailure("status", e);
             throw new ApiException(503, "WEBPAY_STATUS_UNAVAILABLE");
         }
+    }
+
+    private static void logFailure(String operation, RestClientException exception) {
+        // The provider URL can contain the token. Log only the operation and error category.
+        log.warn("Webpay {} failed: {}", operation, exception instanceof RestClientResponseException response
+                ? response.getStatusCode().value() : exception.getClass().getSimpleName());
     }
 
     static boolean validOutcome(Map<String, Object> saved, WebpayClient.Outcome result) {

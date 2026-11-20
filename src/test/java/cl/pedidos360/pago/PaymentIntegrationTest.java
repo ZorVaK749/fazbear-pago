@@ -5,6 +5,10 @@ import static org.assertj.core.api.Assertions.*;
 import static org.mockito.Mockito.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
+import static org.springframework.test.web.client.match.MockRestRequestMatchers.method;
+import static org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo;
+import static org.springframework.test.web.client.response.MockRestResponseCreators.withStatus;
+import static org.springframework.test.web.client.response.MockRestResponseCreators.withSuccess;
 
 import java.math.BigDecimal;
 import java.security.KeyPairGenerator;
@@ -34,6 +38,8 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Primary;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
@@ -41,6 +47,8 @@ import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
+import org.springframework.test.web.client.MockRestServiceServer;
+import org.springframework.test.web.client.ResponseCreator;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.ResourceAccessException;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -135,7 +143,7 @@ class PaymentIntegrationTest {
         var amount = new BigDecimal("12990");
         var initialized = new WebpayClient.Outcome("INITIALIZED", amount, order, session, null);
         var approved = new WebpayClient.Outcome("AUTHORIZED", amount, order, session, 0);
-        when(provider.status(token)).thenReturn(initialized, initialized, approved);
+        when(provider.status(token)).thenReturn(initialized, approved);
         when(provider.commit(token)).thenThrow(new ResourceAccessException("test timeout"));
 
         assertThat(webpay.finish(ALICE, new WebpayService.Return(null, token, order, session)).estado()).isEqualTo("PENDING");
@@ -145,6 +153,46 @@ class PaymentIntegrationTest {
         verify(provider, times(1)).commit(token);
         assertThat(refunds.trusted(redirect.pagoId())).containsEntry("metodo", "WEBPAY_INTEGRACION");
         assertThat(count("payment_outbox")).isZero();
+    }
+
+    @Test
+    void webpayRecordsTheReturnBeforeAProviderOutageAndResumesTheSamePayment() throws Exception {
+        var builder = RestClient.builder().baseUrl(WebpayClient.HOST);
+        var mock = MockRestServiceServer.bindTo(builder).build();
+        var provider = new WebpayClient(builder.build(), "https://site.example.test/checkout/webpay");
+        var webpay = new WebpayService(jdbc, tx, provider, service);
+        var operation = operation(ALICE);
+        String token = "testproviderreference000000003";
+        String create = WebpayClient.HOST + WebpayClient.TRANSACTIONS;
+        String endpoint = create + "/" + token;
+        expectProvider(mock, create, HttpMethod.POST, withSuccess(
+                json.writeValueAsString(Map.of("token", token, "url", WebpayClient.FORM)), MediaType.APPLICATION_JSON));
+        expectProvider(mock, endpoint, HttpMethod.PUT, withStatus(HttpStatus.SERVICE_UNAVAILABLE));
+        expectProvider(mock, endpoint, HttpMethod.GET, withStatus(HttpStatus.SERVICE_UNAVAILABLE));
+        expectProvider(mock, endpoint, HttpMethod.GET, providerOutcome(operation, "INITIALIZED"));
+        expectProvider(mock, endpoint, HttpMethod.PUT, providerOutcome(operation, "AUTHORIZED"));
+        var payment = webpay.start(ALICE, operation, "durable-return").pagoId();
+        assertThatThrownBy(() -> webpay.finish(ALICE, new WebpayService.Return(token, null, null, null)))
+                .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.code).isEqualTo("WEBPAY_STATUS_UNAVAILABLE"));
+        assertThat(jdbc.queryForObject("SELECT browser_return_received FROM webpay_transaction WHERE payment_id=?",
+                Boolean.class, payment)).isTrue();
+        assertThat(webpay.recover(ALICE, payment).estado()).isEqualTo("APPROVED");
+        assertThat(webpay.recover(ALICE, payment).pagoId()).isEqualTo(payment);
+        assertThat(count("webpay_transaction")).isEqualTo(1);
+        mock.verify();
+    }
+
+    private static void expectProvider(MockRestServiceServer mock, String url, HttpMethod verb, ResponseCreator response) {
+        mock.expect(requestTo(url)).andExpect(method(verb)).andRespond(response);
+    }
+
+    private ResponseCreator providerOutcome(UUID operation, String status) {
+        return request -> {
+            var refs = jdbc.queryForMap("SELECT buy_order,session_id FROM webpay_transaction WHERE operation_id=?", operation);
+            return withSuccess(json.writeValueAsString(Map.of("status", status, "buy_order", refs.get("buy_order"),
+                    "session_id", refs.get("session_id"), "amount", 12990, "response_code", 0)),
+                    MediaType.APPLICATION_JSON).createResponse(request);
+        };
     }
 
     @Test
