@@ -126,7 +126,10 @@ python3 deploy/aws/frontend_image.py --apply --image \
 - [x] Confirmar Pago con Flyway V5, Webpay de integración activo y Target Group healthy.
 - [x] Confirmar estable en ECS la revisión `:5` de Fargate con el digest de recuperación.
 - [x] Consultar el intento de 25.980 CLP en Pago, Transbank y Orden.
+- [x] Verificar Pago con Flyway V6 y el frontend en Fargate `:7`.
+- [x] Confirmar el pedido de integración #65 por 11.990 CLP y comprobar la vista **Pago efectuado**.
 - [ ] Confirmar en AWS el cierre del intento vencido y la vuelta al checkout.
+- [ ] Validar en AWS la nueva verificación automática al volver de Transbank.
 
 Para investigar ese intento desde CloudShell, usar una consulta de solo
 lectura a Pago, Transbank de integración y la cotización en Orden:
@@ -174,6 +177,22 @@ mensaje de vencimiento y la vuelta al checkout.
 [CI de Pago V6](https://github.com/ZorVaK749/fazbear-pago/actions/runs/44671595477)
 · [CI de Angular](https://github.com/ZorVaK749/fazbears-frontend/actions/runs/44671606376)
 · [Integración EV3](https://github.com/ZorVaK749/fazbear-pago/actions/runs/44671595425)
+
+### Verificación automática al volver de Transbank
+
+El frontend muestra **Verificando pago** y comprueba el mismo intento.
+Si el resultado sigue pendiente, realiza hasta tres consultas adicionales
+antes de ofrecer el reintento manual. Cuando Orden confirma la compra,
+la vista **Pago efectuado** muestra el monto y el número de pedido.
+
+```bash
+cd "$HOME/pedidos360-ops-pago" &&
+git pull --ff-only origin ev3/webpay-integracion &&
+python3 deploy/aws/frontend_image.py --apply --image \
+  ghcr.io/zorvak749/fazbears-frontend@sha256:d48cfc9e73ee4b52844b3bbe7cad099e57e461e6895c0690e9a9186cfcfa6378
+```
+
+[CI del frontend](https://github.com/ZorVaK749/fazbears-frontend/actions/runs/44745393022)
 
 El catálogo de FazCoins conserva los endpoints protegidos de Fidelización.
 Si un GET autenticado recibe `404 Ruta no encontrada`, comprobar la regla
