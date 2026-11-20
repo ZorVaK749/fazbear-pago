@@ -9,12 +9,25 @@ from pathlib import Path
 import secrets
 import subprocess
 import sys
+from urllib.parse import parse_qs, urlsplit
 
 from fidelizacion_host import PARAMETER, role_environment, validate_config
 from webpay_host import CONTAINER, IMAGE, Host, RolloutError, env_values, postgres_env
 
 DATABASE = "fidelizacion"
 PACKAGE = IMAGE.split("@", 1)[0]
+SCHEMA_SUMMARY = """
+    SELECT json_build_object(
+        'objetos', (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+                     WHERE n.nspname <> 'information_schema' AND n.nspname !~ '^pg_')
+                 + (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+                     WHERE n.nspname <> 'information_schema' AND n.nspname !~ '^pg_')
+                 + (SELECT count(*) FROM pg_namespace WHERE nspname NOT IN ('public', 'information_schema') AND nspname !~ '^pg_'),
+        'fidelizacion', (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+                          WHERE n.nspname='public' AND c.relkind IN ('r', 'p') AND
+                                c.relname IN ('wallet', 'payment_award', 'redemption', 'entitlement',
+                                              'ledger', 'inbox', 'quarantine', 'flyway_schema_history')));
+"""
 
 
 def psql(environment, sql, failure, *, allow_failure=False):
@@ -71,22 +84,81 @@ def scram(password):
     return f"SCRAM-SHA-256${iterations}:{salt64}${stored64}:{server64}"
 
 
+def schema_summary(connection, database):
+    result = psql(dict(connection, PGDATABASE=database), SCHEMA_SUMMARY,
+                  "No se pudo consultar el esquema de Fidelización.")
+    return json.loads(result)
+
+
+def inspect_database(connection):
+    admin = dict(connection, PGDATABASE="postgres")
+    summary = json.loads(psql(admin, """
+        SELECT json_build_object(
+            'puede_crear_roles', (SELECT rolcreaterole FROM pg_roles WHERE rolname=current_user),
+            'puede_crear_bases', (SELECT rolcreatedb FROM pg_roles WHERE rolname=current_user),
+            'rol_fidelizacion_existe', EXISTS (SELECT 1 FROM pg_roles WHERE rolname='fidelizacion'),
+            'bases', COALESCE((SELECT json_object_agg(datname, pg_get_userbyid(datdba)=current_user)
+                               FROM pg_database WHERE datname IN ('fidelizacion', 'fidelizacion_ev3')), '{}'::json));
+        """, "No se pudo consultar el catálogo de RDS desde Pago."))
+    for name, owned in summary["bases"].items():
+        try:
+            details = schema_summary(admin, name)
+        except RolloutError:
+            details = {"estado_esquema": "sin acceso desde Pago"}
+        summary["bases"][name] = {"propiedad_de_pago": owned, **details}
+    summary["configuracion_guardada"] = stored_config() is not None
+    print(json.dumps(summary, indent=2), flush=True)
+
+
+def verify_existing(admin, config, values):
+    address, port = validate_config(config)
+    uri = urlsplit(config["FIDELIZACION_DB_URL"].removeprefix("jdbc:"))
+    if ((address, port) != (admin["PGHOST"], int(admin["PGPORT"]))
+            or config["FIDELIZACION_DB_USER"] == admin["PGUSER"]):
+        raise RolloutError("El SecureString debe usar el mismo RDS y un usuario exclusivo de Fidelización.")
+    if config["INTERNAL_SERVICE_KEY"] != values.get("INTERNAL_SERVICE_KEY"):
+        raise RolloutError("La clave privada de Fidelización difiere de la configurada en Pago.")
+    app = dict(admin, PGDATABASE=uri.path[1:], PGUSER=config["FIDELIZACION_DB_USER"],
+               PGPASSWORD=config["FIDELIZACION_DB_PASSWORD"], PGSSLMODE=parse_qs(uri.query)["sslmode"][0])
+    ready = psql(app, """
+        SELECT has_schema_privilege('public', 'USAGE') AND has_schema_privilege('public', 'CREATE');
+        """, "La conexión a la base existente falló con el usuario guardado en el SecureString.")
+    if ready != "t":
+        raise RolloutError("El usuario de Fidelización requiere USAGE y CREATE en el esquema public de su base.")
+    print("PostgreSQL de Fidelización verificado con la configuración existente.", flush=True)
+
+
 def bootstrap(connection, values):
     admin = dict(connection, PGDATABASE="postgres")
     config = stored_config()
+    if config is not None:
+        validate_config(config)
     jdbc = f"jdbc:postgresql://{admin['PGHOST']}:{admin['PGPORT']}/{DATABASE}?sslmode={admin['PGSSLMODE']}"
     inventory = psql(admin, """
         SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='fidelizacion'),
                COALESCE((SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname='fidelizacion'), '-'),
-               (SELECT rolcreatedb AND rolcreaterole FROM pg_roles WHERE rolname=current_user);
+               (SELECT rolcreaterole FROM pg_roles WHERE rolname=current_user),
+               (SELECT rolcreatedb FROM pg_roles WHERE rolname=current_user);
         """, "No se pudo comprobar el RDS existente desde Pago.")
-    role, owner, authority = inventory.split("|")
-    if owner != "-" and (owner != DATABASE or role != "t"):
-        raise RolloutError("La base existente tiene otro propietario. Revísela antes de reutilizarla.")
-    if (role != "t" or owner == "-") and authority != "t":
+    role, owner, create_role, create_database = inventory.split("|")
+    foreign_owner = owner not in {"-", DATABASE}
+    reusable_empty = (foreign_owner and owner == admin.get("PGUSER")
+                      and schema_summary(admin, DATABASE)["objetos"] == 0)
+    if config is not None and (foreign_owner or config.get("FIDELIZACION_DB_URL") != jdbc
+                               or config.get("FIDELIZACION_DB_USER") != DATABASE):
+        try:
+            verify_existing(admin, config, values)
+            return
+        except RolloutError:
+            # Resume only our interrupted provisioning of an empty database.
+            if not reusable_empty or (config["FIDELIZACION_DB_URL"], config["FIDELIZACION_DB_USER"]) != (jdbc, DATABASE):
+                raise
+    if foreign_owner and not reusable_empty:
+        raise RolloutError("La base existente requiere sus credenciales y permisos vigentes. Use --inspect-db y --set-config.")
+    if (role != "t" and create_role != "t") or (owner == "-" and create_database != "t"):
         raise RolloutError("El usuario de Pago no puede crear roles y bases. Se requiere el administrador de RDS.")
     if config is None:
-        if role == "t" or owner != "-":
+        if role == "t" or (owner != "-" and not foreign_owner):
             raise RolloutError("RDS ya tiene un rol o base de Fidelización. Use sus credenciales vigentes en --set-config.")
         config = {
             "FIDELIZACION_DB_URL": jdbc,
@@ -117,6 +189,15 @@ def bootstrap(connection, values):
             raise RolloutError("El rol dedicado no pudo autenticarse. Revise el SecureString antes de crear la base.")
         psql(writer, f"CREATE DATABASE {DATABASE} OWNER {DATABASE};",
              "PostgreSQL no pudo crear la base. Revise que el administrador pueda asignar el rol fidelizacion como propietario.")
+    elif foreign_owner:
+        psql(dict(writer, PGDATABASE=DATABASE), f"""
+            BEGIN;
+            GRANT CONNECT ON DATABASE {DATABASE} TO {DATABASE};
+            GRANT USAGE, CREATE ON SCHEMA public TO {DATABASE};
+            COMMIT;
+            """, "El propietario no pudo otorgar los permisos de esquema al usuario de Fidelización.")
+        verify_existing(admin, config, values)
+        return
     psql(dict(app, PGDATABASE=DATABASE), "SELECT 1;",
          "La base de Fidelización existe, pero la conexión con su usuario no se pudo verificar.")
     print("PostgreSQL de Fidelización verificado. SecureString listo para desplegar.", flush=True)
@@ -125,7 +206,7 @@ def bootstrap(connection, values):
 def main(args):
     os.umask(0o077)
     try:
-        if args or not Path("/var/run/docker.sock").is_socket():
+        if args not in ([], ["inspect"]) or not Path("/var/run/docker.sock").is_socket():
             raise RolloutError("La preparación de la base debe ejecutarse en la EC2 de Pago.")
         host = Host()
         host.state_dir = Path("/var/lib/pedidos360-fidelizacion-db")
@@ -135,7 +216,11 @@ def main(args):
             if not image.startswith(PACKAGE + "@sha256:") or not pago["State"]["Running"]:
                 raise RolloutError("Se requiere el contenedor activo oficial de Pago.")
             variables = pago["Config"]["Env"]
-            bootstrap(postgres_env(variables), env_values(variables))
+            connection = postgres_env(variables)
+            if args:
+                inspect_database(connection)
+            else:
+                bootstrap(connection, env_values(variables))
     except RolloutError as error:
         print(f"ERROR: {error}", file=sys.stderr)
         return 1

@@ -207,7 +207,7 @@ class FidelizacionTest(unittest.TestCase):
         with patch.object(db, "stored_config", return_value=None), \
                 patch.object(db, "put_config") as put, \
                 patch.object(db.secrets, "token_urlsafe", return_value=password), \
-                patch.object(db, "psql", side_effect=["f|-|t", "", "1", "", "1"]) as psql, \
+                patch.object(db, "psql", side_effect=["f|-|t|t", "", "1", "", "1"]) as psql, \
                 redirect_stdout(io.StringIO()) as output:
             db.bootstrap(connection, values)
         config = put.call_args.args[0]
@@ -221,7 +221,7 @@ class FidelizacionTest(unittest.TestCase):
     def test_lack_of_db_authority_changes_neither_rds_nor_ssm(self):
         connection = {"PGHOST": "db.example.test", "PGPORT": "5432", "PGSSLMODE": "require"}
         with patch.object(db, "stored_config", return_value=None), patch.object(db, "put_config") as put, \
-                patch.object(db, "psql", return_value="f|-|f") as psql:
+                patch.object(db, "psql", return_value="f|-|f|f") as psql:
             with self.assertRaisesRegex(host.RolloutError, "administrador de RDS"):
                 db.bootstrap(connection, {})
         put.assert_not_called()
@@ -230,14 +230,36 @@ class FidelizacionTest(unittest.TestCase):
     def test_existing_unmanaged_database_preserves_its_credentials(self):
         connection = {"PGHOST": "db.example.test", "PGPORT": "5432", "PGSSLMODE": "require"}
         with patch.object(db, "stored_config", return_value=None), patch.object(db, "put_config") as put, \
-                patch.object(db, "psql", return_value="t|fidelizacion|f") as psql:
+                patch.object(db, "psql", return_value="t|fidelizacion|f|f") as psql:
             with self.assertRaisesRegex(host.RolloutError, "--set-config"):
                 db.bootstrap(connection, {})
         put.assert_not_called()
         self.assertEqual(psql.call_count, 1)
 
+    def test_existing_populated_database_needs_its_current_configuration(self):
+        connection = {"PGHOST": "db.example.test", "PGPORT": "5432", "PGSSLMODE": "require", "PGUSER": "pago"}
+        with patch.object(db, "stored_config", return_value=None), patch.object(db, "put_config") as put, \
+                patch.object(db, "psql", side_effect=["f|pago|t|t", '{"objetos": 2, "fidelizacion": 1}']) as psql:
+            with self.assertRaisesRegex(host.RolloutError, "permisos vigentes"):
+                db.bootstrap(connection, {})
+        put.assert_not_called()
+        self.assertEqual(psql.call_count, 2)
+        self.assertTrue(all(call.args[1].strip().startswith("SELECT") for call in psql.call_args_list))
+
+    def test_existing_database_with_supplied_credentials_does_not_change_its_owner(self):
+        connection = {"PGHOST": "db.example.test", "PGPORT": "5432", "PGSSLMODE": "require", "PGUSER": "pago"}
+        config = {"FIDELIZACION_DB_URL": "jdbc:postgresql://db.example.test/fidelizacion?sslmode=require",
+                  "FIDELIZACION_DB_USER": "loyalty", "FIDELIZACION_DB_PASSWORD": "synthetic-private-fixture",
+                  "INTERNAL_SERVICE_KEY": "a" * 32, "KAFKA_BOOTSTRAP_SERVERS": "kafka.example.test:9092"}
+        with patch.object(db, "stored_config", return_value=config), patch.object(db, "put_config") as put, \
+                patch.object(db, "psql", side_effect=["f|other_owner|f|f", "t"]) as psql, redirect_stdout(io.StringIO()):
+            db.bootstrap(connection, config)
+        self.assertEqual(psql.call_args.args[0]["PGUSER"], "loyalty")
+        self.assertTrue(all(call.args[1].strip().startswith("SELECT") for call in psql.call_args_list))
+        put.assert_not_called()
+
     @unittest.skipUnless(os.environ.get("FIDELIZACION_TEST_POSTGRES"), "Requiere PostgreSQL desechable de CI")
-    def test_postgres_creates_and_reuses_the_real_role_and_database(self):
+    def test_postgres_bootstraps_the_existing_empty_database_without_changing_its_owner(self):
         password = os.environ["FIDELIZACION_TEST_POSTGRES"]
         connection = dict(os.environ, PGHOST="127.0.0.1", PGPORT="5432", PGUSER="postgres",
                           PGPASSWORD=password, PGSSLMODE="require")
@@ -253,6 +275,7 @@ class FidelizacionTest(unittest.TestCase):
             # The disposable PostgreSQL service has no TLS certificate.
             return real_psql(dict(environment, PGSSLMODE="disable"), sql, failure, **kwargs)
 
+        ci_psql(dict(connection, PGDATABASE="postgres"), "CREATE DATABASE fidelizacion;", "Faltó la base de prueba.")
         with patch.object(db, "stored_config", side_effect=lambda: saved), \
                 patch.object(db, "put_config", side_effect=keep_config) as put, \
                 patch.object(db, "psql", side_effect=ci_psql):
@@ -262,3 +285,5 @@ class FidelizacionTest(unittest.TestCase):
         app = dict(connection, PGUSER="fidelizacion", PGDATABASE="fidelizacion",
                    PGPASSWORD=saved["FIDELIZACION_DB_PASSWORD"])
         self.assertEqual(ci_psql(app, "SELECT current_user;", "No se pudo comprobar el rol de prueba."), "fidelizacion")
+        self.assertEqual(ci_psql(app, "SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname=current_database();",
+                                "No se pudo comprobar el propietario."), "postgres")

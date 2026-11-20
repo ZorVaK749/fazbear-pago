@@ -228,10 +228,21 @@ python3 deploy/aws/fidelizacion.py --deploy --instance-id "$instance_id"
 
 `--prepare-db` usa el RDS de Pago. Comprueba privilegios de PostgreSQL antes
 de crear la base y el rol, genera una contraseña exclusiva y guarda la
-configuración en Parameter Store. Al detectar una base existente, valida
-el propietario y reutiliza la configuración privada si corresponde. El
+configuración en Parameter Store. Si la base `fidelizacion` ya existe
+vacía y pertenece al usuario de Pago, conserva el propietario y concede
+al rol dedicado acceso a esa base y su esquema `public`. Si hay objetos o
+el propietario es distinto, usa la configuración privada vigente cuando
+esté disponible y comprueba el acceso. El
 perfil SSM de Pago requiere leer y escribir el SecureString de Fidelización
 y el perfil de la EC2 nueva requiere leerlo.
+
+`--inspect-db` muestra qué bases de Fidelización existen en RDS, si Pago
+es su propietario, cuántos objetos tienen y si hay un SecureString guardado.
+Es de solo lectura y no muestra credenciales ni registros de clientes.
+
+```bash
+python3 deploy/aws/fidelizacion.py --inspect-db
+```
 
 Si el usuario de Pago carece de privilegios de creación o de asignación
 del propietario, o el perfil no puede escribir en Parameter Store,
@@ -239,7 +250,7 @@ preparar la base desde una sesión administrativa PostgreSQL autorizada
 dentro del VPC. Si `--prepare-db` dejó el rol y el SecureString listos,
 crear solo la base con el propietario `fidelizacion` y repetir la
 verificación. En una instalación nueva, desde `psql` conectado a
-`postgres`, usar:
+`postgres`, usar estos comandos solo si la base y el rol están ausentes:
 
 ```sql
 CREATE ROLE fidelizacion LOGIN;
@@ -253,7 +264,10 @@ Iniciar `psql` con `-W` para que la contraseña del administrador se ingrese
 en el prompt, desde una EC2 con conectividad autorizada a RDS. Usar el
 bootstrap de Kafka y la clave interna que ya usa Pago. Cuando todavía no
 exista el SecureString, `--set-config` recoge los valores con eco
-desactivado y los guarda en la cuenta. La EC2 lo lee mediante su perfil SSM.
+desactivado y los guarda en la cuenta. Para una base existente usar el
+usuario ya autorizado en esa base, con `USAGE` y `CREATE` en `public` y
+acceso al historial Flyway y a los datos que ya existan. La EC2 lee el
+parámetro mediante su perfil SSM.
 
 ```bash
 python3 deploy/aws/fidelizacion.py --set-config &&

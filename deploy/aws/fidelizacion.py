@@ -251,8 +251,12 @@ def run_service(node, mode):
 
 def prepare_database(node):
     require_running(node)
-    request = python_request(PAGO, "Pedidos360 preparar PostgreSQL de Fidelizacion",
-                             ("webpay_host", "fidelizacion_host", "fidelizacion_db"), (), 160)
+    database_command()
+
+
+def database_command(*arguments):
+    request = python_request(PAGO, "Pedidos360 PostgreSQL de Fidelizacion",
+                             ("webpay_host", "fidelizacion_host", "fidelizacion_db"), arguments, 160)
     run_ssm(request, PAGO, timeout=210,
             failure="La preparación de PostgreSQL quedó pendiente. Revise la salida de SSM.")
 
@@ -382,7 +386,7 @@ def rule_priority(rules, arn):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     flags = parser.add_mutually_exclusive_group(required=True)
-    for mode in ("plan", "create-ec2", "prepare-db", "set-config", "deploy", "verify", "reuse-frontend"):
+    for mode in ("plan", "create-ec2", "inspect-db", "prepare-db", "set-config", "deploy", "verify", "reuse-frontend"):
         flags.add_argument("--" + mode, dest="mode", action="store_const", const=mode)
     flags.add_argument("--retry-ec2", metavar="INSTANCE_ID", help="Reintenta después de una EC2 terminada y espera su arranque.")
     parser.add_argument("--instance-id", metavar="INSTANCE_ID", help="Selecciona la EC2 ya creada por ID en lugar de buscarla por etiqueta.")
@@ -395,6 +399,9 @@ def main():
             raise RolloutError(f"La sesión debe corresponder al laboratorio {ACCOUNT}.")
         if args.mode == "set-config":
             configure()
+            return 0
+        if args.mode == "inspect-db":
+            database_command("inspect")
             return 0
         pago, listener, alb, node = inventory(args.instance_id)
         if args.mode == "create-ec2":
