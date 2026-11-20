@@ -122,11 +122,21 @@ python3 deploy/aws/frontend_image.py --apply --image \
 [CI de Pago](https://github.com/ZorVaK749/fazbear-pago/actions/runs/44654639004)
 · [CI de Angular](https://github.com/ZorVaK749/fazbears-frontend/actions/runs/44654645553)
 
+- [x] Respaldar los registros de Pago y comprobar su SHA256.
+- [x] Confirmar Pago con Flyway V5, Webpay de integración activo y Target Group healthy.
+- [x] Confirmar estable en ECS la revisión `:5` de Fargate con el digest de recuperación.
+- [ ] Conciliar el intento de 25.980 CLP y confirmar el pedido asociado.
+
 El catálogo de FazCoins conserva los endpoints protegidos de Fidelización.
 Si un GET autenticado recibe `404 Ruta no encontrada`, comprobar la regla
 del listener y el Target Group de Fidelización antes de publicar cambios
 en el Gateway. La UI informa indisponibilidad de FazCoins sin cambiar la
 verificación de Webpay.
+
+El inventario del stage confirmó las cuatro rutas de Fidelización en
+`integrations/qamokas`. La búsqueda por el puerto 8089 no encontró un Target
+Group. Queda pendiente identificar el destino de Fidelización en el
+balanceador, EC2 o ECS.
 
 ## DynamoDB y dashboard
 
@@ -240,13 +250,13 @@ y su stock se protegen con el procedimiento de la guía base.
 - [x] Actualizar Carrito, Orden y Notificaciones por digest y verificar sus Target Groups.
 - [x] Registrar la revisión Fargate `:4` con el digest CLP y comprobar el checkout público actualizado.
 - [x] Confirmar que el catálogo vuelve a cargar desde el navegador con sesión iniciada.
-- [ ] Confirmar en ECS el estado estable de la revisión CLP mediante una sesión que pueda usar `ecs:DescribeServices`.
+- [x] Confirmar en ECS la revisión `:5` con el frontend CLP y la recuperación de Webpay.
 - [ ] Validar carrito guardado, nueva cotización y pago Webpay en el entorno de integración.
 
 La sesión del laboratorio recibió una denegación explícita de
-`voc-cancel-cred` al consultar el servicio de Fargate. El checkout público
-sigue entregando el botón Webpay y el código CLP. Se reportó que terminó la
-prueba de pago y queda por confirmar el resultado del pedido.
+`voc-cancel-cred` al consultar la revisión `:4` de Fargate. Una sesión
+posterior confirmó estable la revisión `:5`. El checkout público entrega
+el botón Webpay y el código CLP. Queda por confirmar el resultado del pedido.
 
 Tras el HTTP 503 del catálogo, la consulta de EC2 devolvió `running`, el
 Target Group devolvió `healthy` y el operador confirmó que el catálogo
