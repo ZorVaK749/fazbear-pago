@@ -120,7 +120,7 @@ def aws_json(arguments, failure):
     return json.loads(result.stdout)
 
 
-def managed_admin(connection):
+def find_rds(connection):
     described = aws_json(["rds", "describe-db-instances"],
                          "El perfil de Pago no pudo consultar RDS. Use --stage-db-admin con un administrador autorizado.")
     candidates = [db for db in described["DBInstances"] if db["Engine"] == "postgres"
@@ -128,7 +128,11 @@ def managed_admin(connection):
                   and db["Endpoint"]["Port"] == int(connection["PGPORT"])]
     if len(candidates) != 1:
         raise RolloutError("No se encontró el RDS exacto de Pago. Use --stage-db-admin con un administrador autorizado.")
-    database = candidates[0]
+    return candidates[0]
+
+
+def managed_admin(connection):
+    database = find_rds(connection)
     secret_id = (database.get("MasterUserSecret") or {}).get("SecretArn")
     if not secret_id:
         raise RolloutError("RDS no informa un secreto maestro administrado. Use --stage-db-admin.")
@@ -138,6 +142,15 @@ def managed_admin(connection):
     if secret.get("username") != database["MasterUsername"] or not secret.get("password"):
         raise RolloutError("El secreto administrado no coincide con el usuario maestro de ese RDS.")
     return dict(connection, PGUSER=secret["username"], PGPASSWORD=secret["password"])
+
+
+def rds_network(connection):
+    config = stored_config()
+    address, port = validate_config(config)
+    if (address, port) != (connection["PGHOST"], int(connection["PGPORT"])):
+        raise RolloutError("La configuración de Fidelización no apunta al RDS de Pago.")
+    database = find_rds(connection)
+    print(json.dumps({"identifier": database["DBInstanceIdentifier"], "port": port}), flush=True)
 
 
 def admin_prompt(connection):
@@ -249,7 +262,8 @@ def bootstrap(connection, values):
 def main(args):
     os.umask(0o077)
     try:
-        if args not in ([], ["inspect"], ["managed-admin"], ["interactive-admin"]) or not Path("/var/run/docker.sock").is_socket():
+        if (args not in ([], ["inspect"], ["managed-admin"], ["interactive-admin"], ["rds-network"])
+                or not Path("/var/run/docker.sock").is_socket()):
             raise RolloutError("La preparación de la base debe ejecutarse en la EC2 de Pago.")
         host = Host()
         host.state_dir = Path("/var/lib/pedidos360-fidelizacion-db")
@@ -262,6 +276,8 @@ def main(args):
             connection = postgres_env(variables)
             if args == ["inspect"]:
                 inspect_database(connection)
+            elif args == ["rds-network"]:
+                rds_network(connection)
             else:
                 if args == ["managed-admin"]:
                     connection = managed_admin(connection)

@@ -183,7 +183,7 @@ def run_ssm(request, instance, timeout=480,
                     print(output, file=sys.stderr if field == "StandardErrorContent" else sys.stdout)
             if result["Status"] != "Success":
                 raise RolloutError(failure)
-            return
+            return result.get("StandardOutputContent", "").strip()
         time.sleep(5)
     raise RolloutError("SSM sigue sin confirmar el resultado. Revise el Command ID antes de reintentar.")
 

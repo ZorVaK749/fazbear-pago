@@ -81,14 +81,20 @@ def check_dependencies(config, pago):
     endpoints = [("PostgreSQL", database, db_port)]
     endpoints.extend(("Kafka", entry.rsplit(":", 1)[0], int(entry.rsplit(":", 1)[1]))
                      for entry in config["KAFKA_BOOTSTRAP_SERVERS"].split(","))
+    failures = []
     for label, address, port in endpoints:
+        dependency = f"{label} TCP/{port}"
         try:
             with socket.create_connection((address, port), timeout=5):
-                pass
-        except OSError:
-            raise RolloutError(f"La EC2 no alcanza {label}. Revise la red del laboratorio.") from None
+                print(f"{dependency} · conectado.", flush=True)
+        except OSError as error:
+            failures.append(f"{dependency} ({type(error).__name__})")
     if read_health(pago, 8087).get("status") != "UP":
-        raise RolloutError("La EC2 no pudo comprobar el health de Pago por su IP privada.")
+        failures.append("Pago HTTP/8087 /health")
+    else:
+        print("Pago HTTP/8087 /health · UP.", flush=True)
+    if failures:
+        raise RolloutError("Dependencias inaccesibles desde Fidelización: " + ", ".join(failures) + ".")
 
 
 class FidelizacionHost(Host):

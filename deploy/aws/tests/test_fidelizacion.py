@@ -188,6 +188,50 @@ class FidelizacionTest(unittest.TestCase):
             with self.assertRaisesRegex(host.RolloutError, "EC2 de Fidelización"):
                 fidelizacion.select_instance(pago, other["InstanceId"])
 
+    def test_rds_ingress_uses_only_the_dedicated_source_and_actual_database_port(self):
+        node = {"InstanceId": "i-loyalty", "State": {"Name": "running"}, "SecurityGroups": [{"GroupId": "sg-app"}]}
+        pago = {"VpcId": "vpc-test", "SecurityGroups": [{"GroupId": "sg-pago"}]}
+        sources = {"SecurityGroups": [{"GroupId": "sg-app", "GroupName": fidelizacion.GROUP, "VpcId": "vpc-test"}]}
+        interfaces = {"NetworkInterfaces": [{"Attachment": {"InstanceId": node["InstanceId"]}}]}
+        database = {"DBInstanceIdentifier": "test-rds", "Engine": "postgres", "Endpoint": {"Port": 5432},
+                    "DBSubnetGroup": {"VpcId": "vpc-test"},
+                    "VpcSecurityGroups": [{"VpcSecurityGroupId": "sg-db", "Status": "active"}]}
+        db_group = {"GroupId": "sg-db", "IpPermissions": []}
+        with patch.object(fidelizacion, "database_command", return_value='{"identifier":"test-rds","port":5432}'), \
+                patch.object(fidelizacion, "aws", side_effect=[sources, interfaces, {"DBInstances": [database]},
+                                                               {"SecurityGroups": [db_group]}, {}]) as aws, \
+                redirect_stdout(io.StringIO()):
+            fidelizacion.allow_rds(node, pago)
+        self.assertEqual(aws.call_args.args, ("ec2", "authorize-security-group-ingress"))
+        rule = aws.call_args.kwargs["input_json"]
+        self.assertEqual(rule["GroupId"], "sg-db")
+        self.assertEqual(rule["IpPermissions"], [{"IpProtocol": "tcp", "FromPort": 5432, "ToPort": 5432,
+                         "UserIdGroupPairs": [{"GroupId": "sg-app", "Description": "EV3 Fidelizacion a PostgreSQL"}]}])
+        db_group["IpPermissions"] = rule["IpPermissions"]
+        with patch.object(fidelizacion, "database_command", return_value='{"identifier":"test-rds","port":5432}'), \
+                patch.object(fidelizacion, "aws", side_effect=[sources, interfaces, {"DBInstances": [database]},
+                                                               {"SecurityGroups": [db_group]}]) as aws, \
+                redirect_stdout(io.StringIO()):
+            fidelizacion.allow_rds(node, pago)
+        self.assertEqual(aws.call_count, 4)
+        interfaces["NetworkInterfaces"].append({"Attachment": {"InstanceId": "i-other"}})
+        with patch.object(fidelizacion, "database_command") as inspect, \
+                patch.object(fidelizacion, "aws", side_effect=[sources, interfaces]) as aws:
+            with self.assertRaisesRegex(host.RolloutError, "no es exclusivo"):
+                fidelizacion.allow_rds(node, pago)
+        inspect.assert_not_called()
+        self.assertEqual(aws.call_count, 2)
+
+    def test_reports_all_unreachable_dependencies_without_dumping_endpoint_details(self):
+        config = {"FIDELIZACION_DB_URL": "jdbc:postgresql://db.example.test/fidelizacion?sslmode=require",
+                  "FIDELIZACION_DB_USER": "fidelizacion", "FIDELIZACION_DB_PASSWORD": "test-only",
+                  "KAFKA_BOOTSTRAP_SERVERS": "broker.example.test:9092", "INTERNAL_SERVICE_KEY": "a" * 32}
+        with patch.object(host.socket, "create_connection", side_effect=[TimeoutError(), ConnectionRefusedError()]), \
+                patch.object(host, "read_health", return_value={}):
+            with self.assertRaisesRegex(host.RolloutError, "PostgreSQL TCP/5432.*Kafka TCP/9092.*Pago HTTP/8087") as error:
+                host.check_dependencies(config, "192.0.2.5")
+        self.assertNotIn("example.test", str(error.exception))
+
     def test_dedicated_tls_database_and_kafka_endpoints(self):
         config = {"FIDELIZACION_DB_URL": "jdbc:postgresql://db.example.test:5432/fidelizacion?sslmode=require",
                   "FIDELIZACION_DB_USER": "fidelizacion", "FIDELIZACION_DB_PASSWORD": "test-only",

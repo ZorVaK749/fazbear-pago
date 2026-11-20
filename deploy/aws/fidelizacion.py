@@ -277,8 +277,53 @@ def database_command(*arguments, stage=False):
     request = python_request(PAGO, "Pedidos360 PostgreSQL de Fidelizacion",
                              ("webpay_host", "fidelizacion_host", "fidelizacion_db"),
                              (ADMIN_PATH,) if stage else arguments, 160, **request_options)
-    run_ssm(request, PAGO, timeout=210,
-            failure="La preparación de PostgreSQL quedó pendiente. Revise la salida de SSM.")
+    return run_ssm(request, PAGO, timeout=210,
+                   failure="La operación de PostgreSQL quedó pendiente. Revise la salida de SSM.")
+
+
+def source_allows_postgres(group, port, sources):
+    return any(
+        (rule["IpProtocol"] == "-1" or (rule["IpProtocol"] in {"tcp", "6"} and rule["FromPort"] <= port <= rule["ToPort"]))
+        and any(pair["GroupId"] in sources for pair in rule.get("UserIdGroupPairs", []))
+        for rule in group["IpPermissions"]
+    )
+
+
+def allow_rds(node, pago):
+    instance_id = require_running(node)
+    node_groups = [group["GroupId"] for group in node["SecurityGroups"]]
+    sources = aws("ec2", "describe-security-groups", "--group-ids", *node_groups)["SecurityGroups"]
+    source = one([g for g in sources if g["GroupName"] == GROUP and g["VpcId"] == pago["VpcId"]],
+                 "El grupo dedicado de Fidelización debe estar asociado a su EC2.")["GroupId"]
+    interfaces = aws("ec2", "describe-network-interfaces", "--filters", f"Name=group-id,Values={source}")["NetworkInterfaces"]
+    if not interfaces or any(eni.get("Attachment", {}).get("InstanceId") != instance_id for eni in interfaces):
+        raise RolloutError("El grupo de origen no es exclusivo de la EC2 de Fidelización.")
+
+    rds = json.loads(database_command("rds-network"))
+    databases = aws("rds", "describe-db-instances")["DBInstances"]
+    instance = one([db for db in databases if db["DBInstanceIdentifier"] == rds["identifier"]],
+                   "No se encontró el RDS de Pago en el inventario de CloudShell.")
+    port = rds["port"]
+    if (instance["Engine"] != "postgres" or instance["Endpoint"]["Port"] != port
+            or instance["DBSubnetGroup"]["VpcId"] != pago["VpcId"]):
+        raise RolloutError("El RDS no coincide con la región, el puerto o el VPC del despliegue.")
+    attached = {group["VpcSecurityGroupId"] for group in instance["VpcSecurityGroups"] if group["Status"] == "active"}
+    if not attached:
+        raise RolloutError("El RDS no tiene grupos de seguridad activos.")
+    groups = aws("ec2", "describe-security-groups", "--group-ids", *sorted(attached))["SecurityGroups"]
+    if any(source_allows_postgres(group, port, {source}) for group in groups):
+        print(f"RDS TCP/{port} · acceso de {source} ya autorizado.", flush=True)
+        return
+    shared = {group["VpcSecurityGroupId"] for db in databases if db is not instance for group in db["VpcSecurityGroups"]}
+    exclusive = [group for group in groups if group["GroupId"] not in shared]
+    pago_groups = {group["GroupId"] for group in pago["SecurityGroups"]}
+    preferred = [group for group in exclusive if source_allows_postgres(group, port, pago_groups)]
+    target = one(preferred or exclusive, "El RDS no tiene un grupo de seguridad exclusivo e inequívoco para el cambio.")["GroupId"]
+    aws("ec2", "authorize-security-group-ingress", input_json={"GroupId": target, "IpPermissions": [{
+        "IpProtocol": "tcp", "FromPort": port, "ToPort": port,
+        "UserIdGroupPairs": [{"GroupId": source, "Description": "EV3 Fidelizacion a PostgreSQL"}],
+    }]})
+    print(f"RDS TCP/{port} · acceso autorizado de {source} a {target}.", flush=True)
 
 
 def check_frontend_traffic(node):
@@ -409,15 +454,15 @@ def rule_priority(rules, arn):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     flags = parser.add_mutually_exclusive_group(required=True)
-    for mode in ("plan", "create-ec2", "inspect-db", "prepare-db", "prepare-db-admin", "stage-db-admin",
+    for mode in ("plan", "create-ec2", "inspect-db", "prepare-db", "prepare-db-admin", "stage-db-admin", "allow-rds",
                  "set-config", "deploy", "verify", "reuse-frontend"):
         flags.add_argument("--" + mode, dest="mode", action="store_const", const=mode)
     flags.add_argument("--retry-ec2", metavar="INSTANCE_ID", help="Reintenta después de una EC2 terminada y espera su arranque.")
     parser.add_argument("--instance-id", metavar="INSTANCE_ID", help="Selecciona la EC2 ya creada por ID en lugar de buscarla por etiqueta.")
     args = parser.parse_args()
-    if args.instance_id and (args.mode not in {"prepare-db", "deploy", "verify"}
+    if args.instance_id and (args.mode not in {"prepare-db", "allow-rds", "deploy", "verify"}
                              or not re.fullmatch(r"i-[0-9a-f]{17}", args.instance_id)):
-        parser.error("--instance-id requiere un ID de EC2 válido y --prepare-db, --deploy o --verify.")
+        parser.error("--instance-id requiere un ID de EC2 válido y --prepare-db, --allow-rds, --deploy o --verify.")
     try:
         if aws("sts", "get-caller-identity")["Account"] != ACCOUNT:
             raise RolloutError(f"La sesión debe corresponder al laboratorio {ACCOUNT}.")
@@ -440,6 +485,8 @@ def main():
             wait_for_ec2(retry_ec2(pago, alb, node, args.retry_ec2))
         elif args.mode == "prepare-db":
             prepare_database(node)
+        elif args.mode == "allow-rds":
+            allow_rds(node, pago)
         elif args.mode == "reuse-frontend":
             reuse_frontend(pago, listener, alb, node)
         elif args.mode in {"deploy", "verify"}:

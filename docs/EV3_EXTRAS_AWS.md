@@ -202,6 +202,18 @@ operador necesita además `ecs:DescribeServices`,
 `ssm:DescribeInstanceInformation`, `ec2:ModifyInstanceAttribute` y
 `ec2:CreateTags`. `--verify` puede comprobar el servicio en esa EC2.
 
+Si la EC2 está etiquetada y PostgreSQL ya fue verificado desde Pago, pero
+la conexión desde Fidelización falla, autorizar el puerto configurado en
+RDS desde el grupo exclusivo de Fidelización. El modo requiere
+`rds:DescribeDBInstances`, `ec2:DescribeNetworkInterfaces`,
+`ec2:DescribeSecurityGroups` y `ec2:AuthorizeSecurityGroupIngress`.
+Conserva las reglas existentes y reutiliza una regla equivalente.
+
+```bash
+python3 deploy/aws/fidelizacion.py --allow-rds --instance-id i-0644c1d2ca954f9aa &&
+python3 deploy/aws/fidelizacion.py --reuse-frontend
+```
+
 Para reintentar con el laboratorio activo, indicar el ID de la instancia
 que se confirmó terminada. `--retry-ec2` conserva una instancia dedicada
 existente o solicita una sola EC2 por ID anterior y espera que arranque.
