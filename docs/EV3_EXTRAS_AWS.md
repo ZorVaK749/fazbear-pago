@@ -49,9 +49,11 @@ tenant y cotización antes de crear un Pedido.
 
 Pago serializa la reserva por cotización. Una transacción Webpay activa o de
 resultado incierto impide el cobro simulado sobre esa cotización. Un retorno
-de cancelación o expiración consulta el estado, y solo el retorno normal
-puede iniciar el commit. Ante un commit sin respuesta se consulta el estado
-y se reintenta la verificación del mismo pago. Ante una creación sin
+de cancelación o expiración consulta el estado. Pago registra el retorno normal
+en PostgreSQL antes de invocar el commit. Ante un commit de resultado incierto
+se consulta el estado. El reintento por ID puede confirmar la misma transacción
+si Pago registró el retorno normal y Transbank todavía informa `INITIALIZED`.
+Ante una creación sin
 respuesta se conserva la reserva incierta y se evita repetir la creación.
 Un reinicio después de una aprobación puede recuperarse por el ID público del
 pago usando la cuenta que hizo la compra.
@@ -65,7 +67,7 @@ pedido correspondiente y quedan fuera de ese ledger académico.
 
 ### Configuración y rutas
 
-- Pago aplica Flyway V3 y V4 a PostgreSQL. Orden aplica Flyway V2. En Pedidos H2
+- Pago aplica Flyway V3 a V5 a PostgreSQL. Orden aplica Flyway V2. En Pedidos H2
   y PostgreSQL se usan las columnas existentes. Respaldar previamente los
   tres almacenes. Revisar la matriz de datos y corte de la guía base.
 - Usar `WEBPAY_ENABLED=true` solo tras levantar Pago, Orden, Pedidos y
@@ -89,6 +91,42 @@ pedido correspondiente y quedan fuera de ese ledger académico.
 
 [Guía Webpay Plus de Transbank](https://github.com/TransbankDevelopers/transbank-developers-docs/blob/master/documentacion/webpay-plus/README.md)
 · [Referencia REST de Transbank](https://github.com/TransbankDevelopers/transbank-developers-docs/blob/master/referencia/webpay/README.md)
+
+La prueba automatizada de Pago simula la REST de Transbank y comprueba los
+métodos HTTP, una interrupción en commit y estado, la evidencia guardada
+en PostgreSQL y la posterior recuperación del mismo pago. Angular prueba el
+reintento de confirmación con la misma clave ante un fallo de Orden. La
+validación contra el sandbox de Transbank se realiza después del despliegue.
+
+Un pago iniciado antes de Flyway V5 puede no tener registrado el retorno.
+Si sigue pendiente después de actualizar, conservar la pestaña y reenviar
+el POST original de retorno desde el panel Red del navegador con la misma
+cuenta. Así Pago puede reconocer el retorno sin iniciar otra transacción.
+Mantener el cuerpo y los encabezados del retorno dentro del navegador.
+
+### Release de recuperación del retorno
+
+Actualizar primero Pago y comprobar Flyway V5 y la salud del Target Group.
+El script conserva el entorno y el contenedor anterior, y verifica el SHA256
+de una copia privada de los registros de pago antes del corte. La migración
+agrega un indicador a `webpay_transaction` y usa el mismo PostgreSQL.
+En una interrupción, consultar `--status` o `--verify` con el mismo digest.
+
+```bash
+python3 deploy/aws/webpay_release.py --apply --image \
+  ghcr.io/zorvak749/fazbear-pago@sha256:f1c7dc048ab725b16e585d49d0442d7850a2af4625c11e97740c949734ebf608 &&
+python3 deploy/aws/frontend_image.py --apply --image \
+  ghcr.io/zorvak749/fazbears-frontend@sha256:573dedf028c811125f904c73a75d4bb6957382e3b972323033c8af3436406b48
+```
+
+[CI de Pago](https://github.com/ZorVaK749/fazbear-pago/actions/runs/44654639004)
+· [CI de Angular](https://github.com/ZorVaK749/fazbears-frontend/actions/runs/44654645553)
+
+El catálogo de FazCoins conserva los endpoints protegidos de Fidelización.
+Si un GET autenticado recibe `404 Ruta no encontrada`, comprobar la regla
+del listener y el Target Group de Fidelización antes de publicar cambios
+en el Gateway. La UI informa indisponibilidad de FazCoins sin cambiar la
+verificación de Webpay.
 
 ## DynamoDB y dashboard
 

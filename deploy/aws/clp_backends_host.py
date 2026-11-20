@@ -40,9 +40,9 @@ def http_status(address, port, path):
 
 
 class Backend(Host):
-    def __init__(self, name, address, catalog):
+    def __init__(self, name, address, catalog, release=None):
         self.name = name
-        self.port, self.path, self.image = RELEASE[name]
+        self.port, self.path, self.image = release if release is not None else RELEASE[name]
         self.registry = self.image.split("@", 1)[0]
         self.package = self.registry.rsplit("/", 1)[1]
         self.address = str(IPv4Address(address))
