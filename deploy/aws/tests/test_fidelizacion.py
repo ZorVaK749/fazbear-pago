@@ -1,5 +1,6 @@
 from contextlib import redirect_stdout
 import io
+import os
 from pathlib import Path
 import sys
 import unittest
@@ -7,6 +8,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import fidelizacion
+import fidelizacion_db as db
 import fidelizacion_host as host
 
 
@@ -71,3 +73,66 @@ class FidelizacionTest(unittest.TestCase):
             with self.assertRaises(host.RolloutError):
                 fidelizacion.attach({}, {}, "listener", verify_only=True)
         aws.assert_called_once_with("elbv2", "describe-target-groups")
+
+    def test_database_bootstrap_creates_a_separate_db_and_keeps_password_out_of_sql(self):
+        connection = {"PGHOST": "db.example.test", "PGPORT": "5432", "PGSSLMODE": "require"}
+        values = {"INTERNAL_SERVICE_KEY": "a" * 32, "KAFKA_BOOTSTRAP_SERVERS": "kafka.example.test:9092"}
+        password = "synthetic-private-fixture"
+        with patch.object(db, "stored_config", return_value=None), \
+                patch.object(db, "put_config") as put, \
+                patch.object(db.secrets, "token_urlsafe", return_value=password), \
+                patch.object(db, "psql", side_effect=["f|-|t", "", "1", "", "1"]) as psql, \
+                redirect_stdout(io.StringIO()) as output:
+            db.bootstrap(connection, values)
+        config = put.call_args.args[0]
+        self.assertEqual(config["FIDELIZACION_DB_PASSWORD"], password)
+        self.assertTrue(config["FIDELIZACION_DB_URL"].endswith("/fidelizacion?sslmode=require"))
+        queries = [call.args[1] for call in psql.call_args_list]
+        self.assertIn("CREATE ROLE fidelizacion LOGIN PASSWORD 'SCRAM-SHA-256$", queries[1])
+        self.assertIn("CREATE DATABASE fidelizacion OWNER fidelizacion;", queries[3])
+        self.assertNotIn(password, "".join(queries) + output.getvalue())
+
+    def test_lack_of_db_authority_changes_neither_rds_nor_ssm(self):
+        connection = {"PGHOST": "db.example.test", "PGPORT": "5432", "PGSSLMODE": "require"}
+        with patch.object(db, "stored_config", return_value=None), patch.object(db, "put_config") as put, \
+                patch.object(db, "psql", return_value="f|-|f") as psql:
+            with self.assertRaisesRegex(host.RolloutError, "administrador de RDS"):
+                db.bootstrap(connection, {})
+        put.assert_not_called()
+        self.assertEqual(psql.call_count, 1)
+
+    def test_existing_unmanaged_database_preserves_its_credentials(self):
+        connection = {"PGHOST": "db.example.test", "PGPORT": "5432", "PGSSLMODE": "require"}
+        with patch.object(db, "stored_config", return_value=None), patch.object(db, "put_config") as put, \
+                patch.object(db, "psql", return_value="t|fidelizacion|f") as psql:
+            with self.assertRaisesRegex(host.RolloutError, "--set-config"):
+                db.bootstrap(connection, {})
+        put.assert_not_called()
+        self.assertEqual(psql.call_count, 1)
+
+    @unittest.skipUnless(os.environ.get("FIDELIZACION_TEST_POSTGRES"), "Requiere PostgreSQL desechable de CI")
+    def test_postgres_creates_and_reuses_the_real_role_and_database(self):
+        password = os.environ["FIDELIZACION_TEST_POSTGRES"]
+        connection = dict(os.environ, PGHOST="127.0.0.1", PGPORT="5432", PGUSER="postgres",
+                          PGPASSWORD=password, PGSSLMODE="require")
+        values = {"INTERNAL_SERVICE_KEY": "a" * 32, "KAFKA_BOOTSTRAP_SERVERS": "kafka.example.test:9092"}
+        saved = None
+        real_psql = db.psql
+
+        def keep_config(config):
+            nonlocal saved
+            saved = config
+
+        def ci_psql(environment, sql, failure, **kwargs):
+            # The disposable PostgreSQL service has no TLS certificate.
+            return real_psql(dict(environment, PGSSLMODE="disable"), sql, failure, **kwargs)
+
+        with patch.object(db, "stored_config", side_effect=lambda: saved), \
+                patch.object(db, "put_config", side_effect=keep_config) as put, \
+                patch.object(db, "psql", side_effect=ci_psql):
+            db.bootstrap(connection, values)
+            db.bootstrap(connection, values)
+        put.assert_called_once()
+        app = dict(connection, PGUSER="fidelizacion", PGDATABASE="fidelizacion",
+                   PGPASSWORD=saved["FIDELIZACION_DB_PASSWORD"])
+        self.assertEqual(ci_psql(app, "SELECT current_user;", "No se pudo comprobar el rol de prueba."), "fidelizacion")

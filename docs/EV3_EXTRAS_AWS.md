@@ -168,10 +168,28 @@ python3 deploy/aws/fidelizacion.py --plan &&
 python3 deploy/aws/fidelizacion.py --create-ec2
 ```
 
-Con la EC2 en ejecución, crear la base y el usuario dedicados en el RDS
-existente desde una sesión administrativa PostgreSQL autorizada dentro del
-VPC. Si ya existen, comprobar el propietario y conservar su configuración.
-En una instalación nueva, desde `psql` conectado a la base administrativa
+La instancia solicitada en el laboratorio es `i-05bbd23de4ff0bdea`. Con la
+EC2 en ejecución, preparar la base y el usuario dedicados y luego enlazar
+el microservicio al balanceador.
+
+```bash
+python3 deploy/aws/fidelizacion.py --prepare-db &&
+python3 deploy/aws/fidelizacion.py --deploy
+```
+
+`--prepare-db` usa el RDS de Pago. Comprueba privilegios de PostgreSQL antes
+de crear la base y el rol, genera una contraseña exclusiva y guarda la
+configuración en Parameter Store. Al detectar una base existente, valida
+el propietario y reutiliza la configuración privada si corresponde. El
+perfil SSM de Pago requiere leer y escribir el SecureString de Fidelización
+y el perfil de la EC2 nueva requiere leerlo.
+
+Si el usuario de Pago carece de privilegios de creación o de asignación
+del propietario, o el perfil no puede escribir en Parameter Store,
+preparar la base desde una sesión administrativa PostgreSQL autorizada
+dentro del VPC. Si `--prepare-db` dejó el rol y el SecureString listos,
+crear solo la base con el propietario `fidelizacion` y repetir la
+verificación. En una instalación nueva, desde `psql` conectado a
 `postgres`, usar:
 
 ```sql
@@ -184,9 +202,9 @@ La URL JDBC debe usar la base `fidelizacion` o `fidelizacion_ev3` y TLS,
 por ejemplo `jdbc:postgresql://HOST_RDS:5432/fidelizacion?sslmode=require`.
 Iniciar `psql` con `-W` para que la contraseña del administrador se ingrese
 en el prompt, desde una EC2 con conectividad autorizada a RDS. Usar el
-bootstrap de Kafka y la clave interna que ya usa Pago. El asistente de
-configuración recoge los valores con eco desactivado y los guarda en un
-SecureString de la cuenta. La EC2 lo lee mediante su perfil SSM.
+bootstrap de Kafka y la clave interna que ya usa Pago. Cuando todavía no
+exista el SecureString, `--set-config` recoge los valores con eco
+desactivado y los guarda en la cuenta. La EC2 lo lee mediante su perfil SSM.
 
 ```bash
 python3 deploy/aws/fidelizacion.py --set-config &&

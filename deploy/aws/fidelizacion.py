@@ -167,6 +167,15 @@ def run_service(node, mode):
             failure="SSM no completó Fidelización. Revise el Command ID.")
 
 
+def prepare_database(node):
+    if not node:
+        raise RolloutError("Se requiere una EC2 dedicada registrada antes de preparar PostgreSQL.")
+    request = python_request(PAGO, "Pedidos360 preparar PostgreSQL de Fidelizacion",
+                             ("webpay_host", "fidelizacion_host", "fidelizacion_db"), (), 160)
+    run_ssm(request, PAGO, timeout=210,
+            failure="La preparación de PostgreSQL quedó pendiente. Revise la salida de SSM.")
+
+
 def attach(node, pago, listener, verify_only=False):
     groups = [g for g in aws("elbv2", "describe-target-groups")["TargetGroups"] if g["TargetGroupName"] == TG]
     if groups:
@@ -230,7 +239,7 @@ def rule_priority(rules, arn):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     flags = parser.add_mutually_exclusive_group(required=True)
-    for mode in ("plan", "create-ec2", "set-config", "deploy", "verify"):
+    for mode in ("plan", "create-ec2", "prepare-db", "set-config", "deploy", "verify"):
         flags.add_argument("--" + mode, dest="mode", action="store_const", const=mode)
     args = parser.parse_args()
     try:
@@ -242,6 +251,8 @@ def main():
         pago, listener, alb, node = inventory()
         if args.mode == "create-ec2":
             create_ec2(pago, alb, node)
+        elif args.mode == "prepare-db":
+            prepare_database(node)
         elif args.mode in {"deploy", "verify"}:
             run_service(node, args.mode)
             attach(node, pago, listener, verify_only=args.mode == "verify")

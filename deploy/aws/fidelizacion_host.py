@@ -43,17 +43,24 @@ def validate_config(config):
         if not re.fullmatch(r"[A-Za-z0-9.-]+:[0-9]{1,5}", endpoint) or not (
                 1 <= int(endpoint.rsplit(":", 1)[1]) <= 65535):
             raise RolloutError("Ingrese bootstrap servers de Kafka como host:puerto separados por comas.")
+        host = endpoint.rsplit(":", 1)[0].lower()
+        if host == "localhost" or host.startswith("127."):
+            raise RolloutError("Fidelización necesita un broker alcanzable desde su propia EC2.")
     if len(config["INTERNAL_SERVICE_KEY"]) < 32:
         raise RolloutError("Se requiere la clave interna compartida con Pago de al menos 32 caracteres.")
     return uri.hostname, uri.port or 5432
 
 
-def read_config():
+def role_environment():
     role = {key: value for key, value in os.environ.items() if not key.startswith("AWS_")}
     role.update(AWS_CONFIG_FILE="/dev/null", AWS_SHARED_CREDENTIALS_FILE="/dev/null")
+    return role
+
+
+def read_config():
     response = run(["aws", "ssm", "get-parameter", "--region", "us-east-1", "--name", PARAMETER,
                     "--with-decryption", "--no-cli-pager", "--output", "json"],
-                   "La EC2 no pudo leer el SecureString de Fidelización con su perfil.", env=role)
+                   "La EC2 no pudo leer el SecureString de Fidelización con su perfil.", env=role_environment())
     private = json.loads(response)["Parameter"]
     if private["Name"] != PARAMETER or private["Type"] != "SecureString":
         raise RolloutError("La configuración de Fidelización debe estar en el SecureString esperado.")

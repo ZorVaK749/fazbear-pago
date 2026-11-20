@@ -10,9 +10,21 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:17.7-alpine
+        env:
+          POSTGRES_PASSWORD: synthetic-ops-ci-only
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+      - run: command -v psql || (sudo apt-get update && sudo apt-get install -y postgresql-client)
       - run: python3 -B -m unittest discover -s deploy/aws/tests -v
+        env:
+          FIDELIZACION_TEST_POSTGRES: synthetic-ops-ci-only
