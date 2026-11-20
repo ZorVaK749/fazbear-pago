@@ -153,6 +153,60 @@ del listener interno. Verificar saldo, movimientos y recompensas con sesión
 iniciada y usar un pago simulado para comprobar el abono de FazCoins.
 [CI de Fidelización](https://github.com/ZorVaK749/fazbear-fidelizacion/actions/runs/44362087350)
 
+### EC2 de Fidelización en AWS Academy
+
+Desde CloudShell, en el clon operativo, comprobar el VPC, la integración JWT
+existente y el listener, y crear una instancia `t3.micro` con créditos
+estándar y un volumen raíz cifrado. El comando reutiliza la subred y el
+perfil SSM de Pago. Si la subred usa IP pública para salir, conserva solo
+los grupos reutilizables que carecen de entrada abierta a internet.
+
+```bash
+cd "$HOME/pedidos360-ops-pago" &&
+git pull --ff-only origin ev3/webpay-integracion &&
+python3 deploy/aws/fidelizacion.py --plan &&
+python3 deploy/aws/fidelizacion.py --create-ec2
+```
+
+Con la EC2 en ejecución, crear la base y el usuario dedicados en el RDS
+existente desde una sesión administrativa PostgreSQL autorizada dentro del
+VPC. Si ya existen, comprobar el propietario y conservar su configuración.
+En una instalación nueva, desde `psql` conectado a la base administrativa
+`postgres`, usar:
+
+```sql
+CREATE ROLE fidelizacion LOGIN;
+\password fidelizacion
+CREATE DATABASE fidelizacion OWNER fidelizacion;
+```
+
+La URL JDBC debe usar la base `fidelizacion` o `fidelizacion_ev3` y TLS,
+por ejemplo `jdbc:postgresql://HOST_RDS:5432/fidelizacion?sslmode=require`.
+Iniciar `psql` con `-W` para que la contraseña del administrador se ingrese
+en el prompt, desde una EC2 con conectividad autorizada a RDS. Usar el
+bootstrap de Kafka y la clave interna que ya usa Pago. El asistente de
+configuración recoge los valores con eco desactivado y los guarda en un
+SecureString de la cuenta. La EC2 lo lee mediante su perfil SSM.
+
+```bash
+python3 deploy/aws/fidelizacion.py --set-config &&
+python3 deploy/aws/fidelizacion.py --deploy
+```
+
+El segundo comando instala Docker en la EC2 dedicada, comprueba alcance de
+RDS, Kafka y Pago, levanta la imagen GHCR, verifica `/health`, registra el
+destino y enlaza el prefijo de Fidelización al listener existente. El
+Target Group debe quedar `healthy`. `--verify` comprueba el servicio y su
+destino. Validar con sesión iniciada en el navegador.
+
+El rol del operador necesita lectura del Gateway, VPC Link, EC2 y ALB,
+`ec2:RunInstances`, permisos de etiquetas y creación de grupo de seguridad,
+`iam:PassRole` para el perfil ya autorizado, creación de Target Group y
+regla y registro de destinos del ALB. También requiere `ssm:PutParameter`
+y permisos de Run Command. El perfil de la EC2 requiere acceso SSM y lectura
+del SecureString con descifrado. Si un permiso del laboratorio falta, el
+comando indica la operación AWS que falló.
+
 ## DynamoDB y dashboard
 
 Analytics aplica Flyway V2 en su PostgreSQL. PostgreSQL mantiene la proyección
