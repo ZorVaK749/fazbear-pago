@@ -41,7 +41,27 @@ def one(values, message):
     return values[0]
 
 
-def inventory():
+def select_instance(pago, instance_id=None):
+    if instance_id:
+        record = one(instances(**{"instance-id": instance_id}),
+                     f"AWS no muestra un registro único para {instance_id}.")
+        require_running(record)
+        tags = {entry["Key"]: entry["Value"] for entry in record.get("Tags", [])}
+        token = record.get("ClientToken", "")
+        launch_matches = re.fullmatch(rf"{re.escape(LAUNCH_TOKEN)}(?:-i-[0-9a-f]{{17}})?", token) is not None
+        known = (tags.get("Name") == NAME and tags.get("Project") == PROJECT) or launch_matches
+        if (record["InstanceId"] != instance_id or instance_id == PAGO or record.get("VpcId") != pago["VpcId"]
+                or tags.get("Name", NAME) != NAME or tags.get("Project", PROJECT) != PROJECT or not known):
+            raise RolloutError(f"AWS no identifica {instance_id} como EC2 de Fidelización en el VPC de Pago.")
+        return record
+    records = instances(**{"vpc-id": pago["VpcId"], "tag:Name": NAME,
+                           "instance-state-name": "pending,running,stopping,stopped"})
+    if len(records) > 1:
+        raise RolloutError("Hay más de una EC2 activa o detenida con el nombre de Fidelización.")
+    return records[0] if records else None
+
+
+def inventory(instance_id=None):
     pago = one(instances(**{"instance-id": PAGO}), "No se encontró la EC2 de Pago.")
     routes = aws("apigatewayv2", "get-routes", "--api-id", API)["Items"]
     selected = {r["RouteKey"]: r for r in routes if r["RouteKey"] in ROUTES}
@@ -65,16 +85,13 @@ def inventory():
               "No se encontró el balanceador compartido de EV3.")
     if alb["Scheme"] != "internal" or alb["VpcId"] != pago["VpcId"] or not alb.get("SecurityGroups"):
         raise RolloutError("Pago y el ALB interno deben pertenecer al mismo VPC.")
-    records = instances(**{"vpc-id": pago["VpcId"], "tag:Name": NAME,
-                           "instance-state-name": "pending,running,stopping,stopped"})
-    if len(records) > 1:
-        raise RolloutError("Hay más de una EC2 activa o detenida con el nombre de Fidelización.")
+    node = select_instance(pago, instance_id)
     print(f"VPC {pago['VpcId']} · subnet {pago['SubnetId']} · ALB {alb['LoadBalancerName']}", flush=True)
-    if records:
-        print(f"Fidelización EC2: {records[0]['InstanceId']} · {records[0]['State']['Name']}", flush=True)
+    if node:
+        print(f"Fidelización EC2: {node['InstanceId']} · {node['State']['Name']}", flush=True)
     else:
         print("Fidelización: aún sin EC2 dedicada.", flush=True)
-    return pago, listener_arn, alb, records[0] if records else None
+    return pago, listener_arn, alb, node
 
 
 def open_to_alb(pago, alb):
@@ -160,19 +177,27 @@ def retry_ec2(pago, alb, existing, previous_id):
     return create_ec2(pago, alb, None, client_token=f"{LAUNCH_TOKEN}-{previous_id}")
 
 
+def require_running(node):
+    if not node:
+        raise RolloutError("Se requiere una EC2 dedicada de Fidelización. Si ya la creó, indique --instance-id.")
+    instance_id = node["InstanceId"]
+    state = node["State"]["Name"]
+    if state != "running":
+        reason = node.get("StateReason", {}).get("Message") or node.get("StateTransitionReason")
+        raise RolloutError(f"EC2 {instance_id} · {state}" + (f" · {reason}" if reason else ""))
+    return instance_id
+
+
 def wait_for_ec2(instance_id):
     deadline = time.monotonic() + 150
     while time.monotonic() < deadline:
         records = instances(**{"instance-id": instance_id})
         if records:
             record = one(records, "AWS devolvió un estado ambiguo para la EC2 de Fidelización.")
-            state = record["State"]["Name"]
-            if state == "running":
+            if record["State"]["Name"] != "pending":
+                require_running(record)
                 print(f"EC2 de Fidelización en ejecución: {instance_id}", flush=True)
                 return
-            if state != "pending":
-                reason = record.get("StateReason", {}).get("Message") or record.get("StateTransitionReason")
-                raise RolloutError(f"EC2 {instance_id} · {state}" + (f" · {reason}" if reason else ""))
         time.sleep(5)
     raise RolloutError(f"EC2 {instance_id} aún no está en ejecución. Consulte el estado con --plan.")
 
@@ -198,9 +223,7 @@ def configure():
 
 
 def run_service(node, mode):
-    if not node or node["State"]["Name"] != "running":
-        raise RolloutError("La EC2 dedicada debe estar en ejecución.")
-    instance = node["InstanceId"]
+    instance = require_running(node)
     deploy = mode == "deploy"
     request = python_request(instance, f"Pedidos360 Fidelizacion {mode}",
                              ("webpay_host", "fidelizacion_host"),
@@ -210,8 +233,7 @@ def run_service(node, mode):
 
 
 def prepare_database(node):
-    if not node:
-        raise RolloutError("Se requiere una EC2 dedicada registrada antes de preparar PostgreSQL.")
+    require_running(node)
     request = python_request(PAGO, "Pedidos360 preparar PostgreSQL de Fidelizacion",
                              ("webpay_host", "fidelizacion_host", "fidelizacion_db"), (), 160)
     run_ssm(request, PAGO, timeout=210,
@@ -284,14 +306,18 @@ def main():
     for mode in ("plan", "create-ec2", "prepare-db", "set-config", "deploy", "verify"):
         flags.add_argument("--" + mode, dest="mode", action="store_const", const=mode)
     flags.add_argument("--retry-ec2", metavar="INSTANCE_ID", help="Reintenta después de una EC2 terminada y espera su arranque.")
+    parser.add_argument("--instance-id", metavar="INSTANCE_ID", help="Selecciona la EC2 ya creada por ID en lugar de buscarla por etiqueta.")
     args = parser.parse_args()
+    if args.instance_id and (args.mode not in {"prepare-db", "deploy", "verify"}
+                             or not re.fullmatch(r"i-[0-9a-f]{17}", args.instance_id)):
+        parser.error("--instance-id requiere un ID de EC2 válido y --prepare-db, --deploy o --verify.")
     try:
         if aws("sts", "get-caller-identity")["Account"] != ACCOUNT:
             raise RolloutError(f"La sesión debe corresponder al laboratorio {ACCOUNT}.")
         if args.mode == "set-config":
             configure()
             return 0
-        pago, listener, alb, node = inventory()
+        pago, listener, alb, node = inventory(args.instance_id)
         if args.mode == "create-ec2":
             create_ec2(pago, alb, node)
         elif args.retry_ec2:

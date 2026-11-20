@@ -186,11 +186,15 @@ python3 deploy/aws/fidelizacion.py --retry-ec2 i-05bbd23de4ff0bdea
 ```
 
 Con la EC2 de Fidelización en ejecución, preparar la base y el usuario
-dedicados y luego enlazar el microservicio al balanceador.
+dedicados y luego enlazar el microservicio al balanceador. Si la búsqueda
+por etiquetas todavía no muestra la instancia, indicar su ID. El script
+comprueba el estado, el VPC y la identidad de Fidelización mediante las
+etiquetas o el token de lanzamiento registrado por EC2.
 
 ```bash
-python3 deploy/aws/fidelizacion.py --prepare-db &&
-python3 deploy/aws/fidelizacion.py --deploy
+instance_id=i-082693721a3cda5f9
+python3 deploy/aws/fidelizacion.py --prepare-db --instance-id "$instance_id" &&
+python3 deploy/aws/fidelizacion.py --deploy --instance-id "$instance_id"
 ```
 
 `--prepare-db` usa el RDS de Pago. Comprueba privilegios de PostgreSQL antes

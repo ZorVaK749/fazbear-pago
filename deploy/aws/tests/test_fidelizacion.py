@@ -98,13 +98,37 @@ class FidelizacionTest(unittest.TestCase):
 
     def test_wait_reports_ec2_reason_on_terminal_transition(self):
         pending = {"State": {"Name": "pending"}}
-        terminated = {"State": {"Name": "terminated"},
+        terminated = {"InstanceId": "i-new", "State": {"Name": "terminated"},
                       "StateReason": {"Message": "Client.UserInitiatedShutdown: User initiated shutdown"}}
         with patch.object(fidelizacion, "instances", side_effect=[[pending], [terminated]]), \
                 patch.object(fidelizacion.time, "sleep") as sleep:
             with self.assertRaisesRegex(host.RolloutError, "terminated · Client.UserInitiatedShutdown"):
                 fidelizacion.wait_for_ec2("i-new")
         sleep.assert_called_once_with(5)
+
+    def test_selects_running_fidelizacion_by_id_when_tags_are_not_visible(self):
+        instance_id = "i-0123456789abcdef0"
+        pago = {"VpcId": "vpc-test"}
+        record = {"InstanceId": instance_id, "VpcId": "vpc-test", "State": {"Name": "running"},
+                  "ClientToken": f"{fidelizacion.LAUNCH_TOKEN}-i-0123456789abcdef1"}
+        with patch.object(fidelizacion, "instances", return_value=[record]) as instances:
+            self.assertIs(fidelizacion.select_instance(pago, instance_id), record)
+            instances.assert_called_once_with(**{"instance-id": instance_id})
+            record["VpcId"] = "vpc-other"
+            with self.assertRaisesRegex(host.RolloutError, "VPC de Pago"):
+                fidelizacion.select_instance(pago, instance_id)
+            record["VpcId"] = pago["VpcId"]
+            record["ClientToken"] = "other-service"
+            with self.assertRaisesRegex(host.RolloutError, "EC2 de Fidelización"):
+                fidelizacion.select_instance(pago, instance_id)
+
+    def test_prepare_database_checks_instance_state_before_sending_ssm(self):
+        record = {"InstanceId": "i-new", "State": {"Name": "terminated"},
+                  "StateReason": {"Message": "Client.UserInitiatedShutdown"}}
+        with patch.object(fidelizacion, "run_ssm") as run:
+            with self.assertRaisesRegex(host.RolloutError, "i-new · terminated · Client.UserInitiatedShutdown"):
+                fidelizacion.prepare_database(record)
+        run.assert_not_called()
 
     def test_dedicated_tls_database_and_kafka_endpoints(self):
         config = {"FIDELIZACION_DB_URL": "jdbc:postgresql://db.example.test:5432/fidelizacion?sslmode=require",
