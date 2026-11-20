@@ -168,9 +168,22 @@ python3 deploy/aws/fidelizacion.py --plan &&
 python3 deploy/aws/fidelizacion.py --create-ec2
 ```
 
-La instancia solicitada en el laboratorio es `i-05bbd23de4ff0bdea`. Con la
-EC2 en ejecución, preparar la base y el usuario dedicados y luego enlazar
-el microservicio al balanceador.
+La primera instancia, `i-05bbd23de4ff0bdea`, terminó el 20 de noviembre a
+las 02:03:25 UTC. EC2 registró `Client.UserInitiatedShutdown`. El historial
+de AWS CloudTrail, si el laboratorio permite consultarlo, permite revisar
+el evento `TerminateInstances` y su origen.
+
+Para reintentar con el laboratorio activo, indicar el ID terminado
+mientras AWS aún exponga su estado. `--retry-ec2` conserva una instancia
+dedicada existente o solicita una sola EC2 por ID anterior y espera que
+arranque. Si vuelve a terminar, muestra el motivo de AWS.
+
+```bash
+python3 deploy/aws/fidelizacion.py --retry-ec2 i-05bbd23de4ff0bdea
+```
+
+Con la EC2 de Fidelización en ejecución, preparar la base y el usuario
+dedicados y luego enlazar el microservicio al balanceador.
 
 ```bash
 python3 deploy/aws/fidelizacion.py --prepare-db &&

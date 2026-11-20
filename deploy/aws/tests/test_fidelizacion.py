@@ -54,8 +54,39 @@ class FidelizacionTest(unittest.TestCase):
 
     def test_reuses_a_dedicated_instance_without_allocating_another(self):
         with patch.object(fidelizacion, "aws") as aws, redirect_stdout(io.StringIO()):
-            fidelizacion.create_ec2({}, {}, {"InstanceId": "i-existing"})
+            self.assertEqual(fidelizacion.create_ec2({}, {}, {"InstanceId": "i-existing"}), "i-existing")
         aws.assert_not_called()
+
+    def test_retry_uses_a_stable_new_token_for_the_confirmed_terminated_instance(self):
+        instance_id = "i-0123456789abcdef0"
+        pago = {"VpcId": "vpc-test"}
+        previous = {"VpcId": "vpc-test", "State": {"Name": "terminated"},
+                    "Tags": [{"Key": "Name", "Value": fidelizacion.NAME},
+                             {"Key": "Project", "Value": fidelizacion.PROJECT}]}
+        with patch.object(fidelizacion, "instances", return_value=[previous]), \
+                patch.object(fidelizacion, "create_ec2", return_value="i-new") as create, \
+                redirect_stdout(io.StringIO()):
+            self.assertEqual(fidelizacion.retry_ec2(pago, {}, None, instance_id), "i-new")
+            previous["VpcId"] = "vpc-other"
+            with self.assertRaisesRegex(host.RolloutError, "EC2 terminada de Fidelización"):
+                fidelizacion.retry_ec2(pago, {}, None, instance_id)
+        create.assert_called_once_with(pago, {}, None, client_token=f"{fidelizacion.LAUNCH_TOKEN}-{instance_id}")
+
+    def test_retry_reuses_the_active_instance_even_if_the_old_record_has_expired(self):
+        with patch.object(fidelizacion, "aws") as aws, redirect_stdout(io.StringIO()):
+            target = fidelizacion.retry_ec2({}, {}, {"InstanceId": "i-existing"}, "i-0123456789abcdef0")
+        self.assertEqual(target, "i-existing")
+        aws.assert_not_called()
+
+    def test_wait_reports_ec2_reason_on_terminal_transition(self):
+        pending = {"State": {"Name": "pending"}}
+        terminated = {"State": {"Name": "terminated"},
+                      "StateReason": {"Message": "Client.UserInitiatedShutdown: User initiated shutdown"}}
+        with patch.object(fidelizacion, "instances", side_effect=[[pending], [terminated]]), \
+                patch.object(fidelizacion.time, "sleep") as sleep:
+            with self.assertRaisesRegex(host.RolloutError, "terminated · Client.UserInitiatedShutdown"):
+                fidelizacion.wait_for_ec2("i-new")
+        sleep.assert_called_once_with(5)
 
     def test_dedicated_tls_database_and_kafka_endpoints(self):
         config = {"FIDELIZACION_DB_URL": "jdbc:postgresql://db.example.test:5432/fidelizacion?sslmode=require",

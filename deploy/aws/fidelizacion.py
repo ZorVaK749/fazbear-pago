@@ -7,6 +7,7 @@ import getpass
 import json
 import re
 import sys
+import time
 import warnings
 
 from clp_productos import python_request
@@ -14,6 +15,8 @@ from fidelizacion_host import PARAMETER, PORT, validate_config
 from webpay import ACCOUNT, INSTANCE as PAGO, RolloutError, aws, private_ip, run_ssm, wait_for_target
 
 NAME = "fazbear-fidelizacion"
+PROJECT = "Pedidos360-EV3"
+LAUNCH_TOKEN = "pedidos360-ev3-fidelizacion-v1"
 GROUP = "fazbear-fidelizacion-alb"
 TG = "fazbear-tg-fidelizacion"
 API = "uuzifgcyd2"
@@ -96,10 +99,10 @@ def open_to_alb(pago, alb):
     return group_id
 
 
-def create_ec2(pago, alb, existing):
+def create_ec2(pago, alb, existing, *, client_token=LAUNCH_TOKEN):
     if existing:
         print("Se conserva la instancia dedicada ya registrada.", flush=True)
-        return
+        return existing["InstanceId"]
     profile = pago.get("IamInstanceProfile", {}).get("Arn")
     original_groups = [g["GroupId"] for g in pago.get("SecurityGroups", [])]
     if not profile or not original_groups:
@@ -119,11 +122,11 @@ def create_ec2(pago, alb, existing):
             print("La EC2 reutilizará solo los grupos de Pago sin entrada abierta a internet.", flush=True)
         original_groups = restricted
     group = open_to_alb(pago, alb)
-    tags = [{"Key": "Name", "Value": NAME}, {"Key": "Project", "Value": "Pedidos360-EV3"}]
+    tags = [{"Key": "Name", "Value": NAME}, {"Key": "Project", "Value": PROJECT}]
     response = aws("ec2", "run-instances", input_json={
         "MinCount": 1, "MaxCount": 1, "ImageId": image["ImageId"], "InstanceType": "t3.micro",
         "IamInstanceProfile": {"Arn": profile},
-        "ClientToken": "pedidos360-ev3-fidelizacion-v1",
+        "ClientToken": client_token,
         "NetworkInterfaces": [{"DeviceIndex": 0, "SubnetId": pago["SubnetId"],
                                "Groups": sorted(set(original_groups + [group])), "AssociatePublicIpAddress": public}],
         "MetadataOptions": {"HttpTokens": "required"},
@@ -132,7 +135,41 @@ def create_ec2(pago, alb, existing):
                                  "Ebs": {"Encrypted": True, "DeleteOnTermination": True}}],
         "TagSpecifications": [{"ResourceType": resource, "Tags": tags} for resource in ("instance", "volume")],
     })
-    print(f"EC2 dedicada solicitada: {response['Instances'][0]['InstanceId']}", flush=True)
+    instance_id = response["Instances"][0]["InstanceId"]
+    print(f"EC2 dedicada solicitada: {instance_id}", flush=True)
+    return instance_id
+
+
+def retry_ec2(pago, alb, existing, previous_id):
+    if not re.fullmatch(r"i-[0-9a-f]{17}", previous_id):
+        raise RolloutError("Ingrese el ID de la EC2 terminada de Fidelización.")
+    if existing:
+        return create_ec2(pago, alb, existing)
+    previous = one(instances(**{"instance-id": previous_id}),
+                   "AWS ya no muestra la instancia anterior. Revise el historial del laboratorio.")
+    tags = {entry["Key"]: entry["Value"] for entry in previous.get("Tags", [])}
+    if (tags.get("Name") != NAME or tags.get("Project") != PROJECT or previous.get("VpcId") != pago["VpcId"]
+            or previous["State"]["Name"] != "terminated"):
+        raise RolloutError("El ID debe pertenecer a una EC2 terminada de Fidelización en este VPC.")
+    print(f"Fidelización anterior {previous_id} · {previous.get('StateReason', {}).get('Code', 'terminated')}", flush=True)
+    return create_ec2(pago, alb, None, client_token=f"{LAUNCH_TOKEN}-{previous_id}")
+
+
+def wait_for_ec2(instance_id):
+    deadline = time.monotonic() + 150
+    while time.monotonic() < deadline:
+        records = instances(**{"instance-id": instance_id})
+        if records:
+            record = one(records, "AWS devolvió un estado ambiguo para la EC2 de Fidelización.")
+            state = record["State"]["Name"]
+            if state == "running":
+                print(f"EC2 de Fidelización en ejecución: {instance_id}", flush=True)
+                return
+            if state != "pending":
+                reason = record.get("StateReason", {}).get("Message") or record.get("StateTransitionReason")
+                raise RolloutError(f"EC2 {instance_id} · {state}" + (f" · {reason}" if reason else ""))
+        time.sleep(5)
+    raise RolloutError(f"EC2 {instance_id} aún no está en ejecución. Consulte el estado con --plan.")
 
 
 def configure():
@@ -241,6 +278,7 @@ def main():
     flags = parser.add_mutually_exclusive_group(required=True)
     for mode in ("plan", "create-ec2", "prepare-db", "set-config", "deploy", "verify"):
         flags.add_argument("--" + mode, dest="mode", action="store_const", const=mode)
+    flags.add_argument("--retry-ec2", metavar="INSTANCE_ID", help="Reintenta después de una EC2 terminada y espera su arranque.")
     args = parser.parse_args()
     try:
         if aws("sts", "get-caller-identity")["Account"] != ACCOUNT:
@@ -251,6 +289,8 @@ def main():
         pago, listener, alb, node = inventory()
         if args.mode == "create-ec2":
             create_ec2(pago, alb, node)
+        elif args.retry_ec2:
+            wait_for_ec2(retry_ec2(pago, alb, node, args.retry_ec2))
         elif args.mode == "prepare-db":
             prepare_database(node)
         elif args.mode in {"deploy", "verify"}:
