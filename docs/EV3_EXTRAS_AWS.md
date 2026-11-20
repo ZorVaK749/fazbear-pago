@@ -168,10 +168,18 @@ python3 deploy/aws/fidelizacion.py --plan &&
 python3 deploy/aws/fidelizacion.py --create-ec2
 ```
 
-La primera instancia, `i-05bbd23de4ff0bdea`, terminó el 20 de noviembre a
-las 02:03:25 UTC. EC2 registró `Client.UserInitiatedShutdown`. El historial
-de AWS CloudTrail, si el laboratorio permite consultarlo, permite revisar
-el evento `TerminateInstances` y su origen.
+Las instancias `i-05bbd23de4ff0bdea` e `i-082693721a3cda5f9` terminaron
+con `Client.UserInitiatedShutdown`. La segunda alcanzó `running` y terminó
+antes de preparar PostgreSQL. Revisar el evento `TerminateInstances` con
+un rol que tenga `cloudtrail:LookupEvents` para identificar el origen antes
+de solicitar otro reemplazo.
+
+```bash
+aws cloudtrail lookup-events --region us-east-1 \
+  --lookup-attributes AttributeKey=ResourceName,AttributeValue=i-082693721a3cda5f9 \
+  --query 'Events[?EventName==`TerminateInstances`].{Hora:EventTime,Actor:Username,Id:EventId}' \
+  --output table
+```
 
 Para reintentar con el laboratorio activo, indicar el ID de la instancia
 que se confirmó terminada. `--retry-ec2` conserva una instancia dedicada
@@ -182,7 +190,7 @@ operador identifica el intento. Si la nueva instancia vuelve a terminar,
 el script muestra el motivo de AWS.
 
 ```bash
-python3 deploy/aws/fidelizacion.py --retry-ec2 i-05bbd23de4ff0bdea
+python3 deploy/aws/fidelizacion.py --retry-ec2 ID_EC2_TERMINADA
 ```
 
 Con la EC2 de Fidelización en ejecución, preparar la base y el usuario
@@ -192,7 +200,7 @@ comprueba el estado, el VPC y la identidad de Fidelización mediante las
 etiquetas o el token de lanzamiento registrado por EC2.
 
 ```bash
-instance_id=i-082693721a3cda5f9
+instance_id=ID_EC2_EN_EJECUCION
 python3 deploy/aws/fidelizacion.py --prepare-db --instance-id "$instance_id" &&
 python3 deploy/aws/fidelizacion.py --deploy --instance-id "$instance_id"
 ```
