@@ -201,6 +201,7 @@ y su stock se protegen con el procedimiento de la guía base.
 - [x] Aplicar los precios CLP en una copia, comprobar IDs y stock, y confirmar el Target Group healthy.
 - [x] Actualizar Carrito, Orden y Notificaciones por digest y verificar sus Target Groups.
 - [x] Registrar la revisión Fargate `:4` con el digest CLP y comprobar el checkout público actualizado.
+- [x] Confirmar que el catálogo vuelve a cargar desde el navegador con sesión iniciada.
 - [ ] Confirmar en ECS el estado estable de la revisión CLP mediante una sesión que pueda usar `ecs:DescribeServices`.
 - [ ] Validar carrito guardado, nueva cotización y pago Webpay en el entorno de integración.
 
@@ -208,6 +209,12 @@ La sesión del laboratorio recibió una denegación explícita de
 `voc-cancel-cred` al consultar el servicio de Fargate. El checkout público
 sigue entregando el botón Webpay y el código CLP. Se reportó que terminó la
 prueba de pago y queda por confirmar el resultado del pedido.
+
+Tras el HTTP 503 del catálogo, la consulta de EC2 devolvió `running`, el
+Target Group devolvió `healthy` y el operador confirmó que el catálogo
+volvió a cargar. La interfaz con el mensaje de error corregido pasó
+[CI de Angular](https://github.com/ZorVaK749/fazbears-frontend/actions/runs/44597769930)
+y quedó publicada en GHCR para un despliegue posterior.
 
 El orden del cambio, el comando de inventario y las condiciones para recuperar
 el despliegue están en la [guía de CLP](../deploy/aws/README.md#cambio-de-catálogo-a-clp).
