@@ -337,6 +337,9 @@ def reuse_frontend(pago, listener, alb, existing):
     group = open_to_alb(pago, alb)
     if group not in groups:
         aws("ec2", "modify-instance-attribute", "--instance-id", LEGACY_FRONTEND, "--groups", *sorted(groups | {group}))
+        print(f"Grupo de seguridad de Fidelización añadido: {group}.", flush=True)
+    else:
+        print(f"Grupo de seguridad de Fidelización ya asociado: {group}.", flush=True)
     if not reused_frontend(node, tags):
         aws("ec2", "create-tags", "--resources", LEGACY_FRONTEND, "--tags", f"Key={SERVICE_TAG},Value={NAME}")
     run_service(node, "deploy")

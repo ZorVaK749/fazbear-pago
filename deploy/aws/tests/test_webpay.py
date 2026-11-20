@@ -345,6 +345,31 @@ class AwsDispatchTests(unittest.TestCase):
                 host.webpay_overrides("ssm")
 
 
+class AwsCliTests(unittest.TestCase):
+    def test_successful_operations_that_return_no_output_do_not_raise(self):
+        commands = [("ec2", "modify-instance-attribute"), ("ec2", "create-tags"), ("elbv2", "register-targets")]
+        for args in commands:
+            with self.subTest(args=args), patch.object(webpay.subprocess, "run",
+                    return_value=subprocess.CompletedProcess(args, 0, b"\n")):
+                self.assertEqual(webpay.aws(*args), {})
+
+    def test_an_empty_required_json_response_remains_an_error(self):
+        args = ("ec2", "describe-instances")
+        with patch.object(webpay.subprocess, "run", return_value=subprocess.CompletedProcess(args, 0, b"")):
+            with self.assertRaises(host.RolloutError):
+                webpay.aws(*args)
+
+    def test_aws_error_code_is_reported_without_the_raw_message(self):
+        args = ("ec2", "modify-instance-attribute")
+        denied = subprocess.CalledProcessError(254, args, output=b"", stderr=(
+            f"aws: [ERROR]: An error occurred (UnauthorizedOperation) when calling ModifyInstanceAttribute: {KEY}".encode()
+        ))
+        with patch.object(webpay.subprocess, "run", side_effect=denied):
+            with self.assertRaisesRegex(host.RolloutError, "UnauthorizedOperation") as error:
+                webpay.aws(*args)
+        self.assertNotIn(KEY, str(error.exception))
+
+
 class CredentialProvisionTests(unittest.TestCase):
     @unittest.skipUnless(sys.platform == "linux" and shutil.which("aws"), "Requiere AWS CLI en Linux")
     def test_aws_cli_accepts_securestring_json_from_anonymous_memory_without_an_api_call(self):

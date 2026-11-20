@@ -23,6 +23,7 @@ INSTANCE = "i-0241836a7e45a2e3f"
 PORT = 8087
 HOST_SCRIPT = Path(__file__).with_name("webpay_host.py")
 TARGET_ARN = re.compile(r"arn:aws:elasticloadbalancing:us-east-1:[0-9]{12}:targetgroup/[A-Za-z0-9-]+/[a-f0-9]+")
+EMPTY_AWS_OUTPUT = {("ec2", "modify-instance-attribute"), ("ec2", "create-tags"), ("elbv2", "register-targets")}
 
 
 @contextmanager
@@ -48,14 +49,19 @@ def aws(*args, input_json=None):
                 ["aws", "--region", REGION, "--no-cli-pager", "--output", "json", *arguments],
                 capture_output=True, check=True, timeout=30, pass_fds=fds,
             )
+        if args[:2] in EMPTY_AWS_OUTPUT and not response.stdout.strip():
+            return {}
         return json.loads(response.stdout)
     except subprocess.CalledProcessError as error:
+        stderr = error.stderr or b""
         if args[:2] == ("ssm", "put-parameter"):
-            stderr = error.stderr or b""
             if b"(ParameterAlreadyExists)" in stderr:
                 return {"AlreadyExists": True}
             if b"AccessDenied" in stderr or b"is not authorized" in stderr:
                 failure = "AWS denegó la creación del parámetro. Revise ssm:PutParameter y los permisos KMS."
+        code = re.search(rb"An error occurred \(([A-Za-z][A-Za-z0-9._-]{0,63})\)", stderr)
+        if code:
+            failure = f"{failure} Código AWS: {code.group(1).decode('ascii')}."
         raise RolloutError(failure) from None
     except (OSError, ValueError, subprocess.SubprocessError):
         raise RolloutError(failure) from None
