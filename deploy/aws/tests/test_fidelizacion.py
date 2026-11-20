@@ -130,6 +130,59 @@ class FidelizacionTest(unittest.TestCase):
                 fidelizacion.prepare_database(record)
         run.assert_not_called()
 
+    def test_reuse_refuses_to_change_an_ec2_with_a_frontend_target_group_attached(self):
+        node = {"PrivateIpAddress": "192.0.2.10"}
+        services = {"services": [{"status": "ACTIVE", "launchType": "FARGATE", "runningCount": 1, "desiredCount": 1}]}
+        group = {"TargetGroupName": fidelizacion.LEGACY_TG, "LoadBalancerArns": ["active-alb"]}
+        with patch.object(fidelizacion, "aws", side_effect=[services, {"TargetGroups": [group]}]) as aws, \
+                patch.object(fidelizacion, "verify_checkout"):
+            with self.assertRaisesRegex(host.RolloutError, "sigue asociado"):
+                fidelizacion.check_frontend_traffic(node)
+        self.assertEqual([call.args[:2] for call in aws.call_args_list],
+                         [("ecs", "describe-services"), ("elbv2", "describe-target-groups")])
+
+    def test_reuse_checks_database_before_adding_network_and_service_tag_to_known_host(self):
+        instance_id = fidelizacion.LEGACY_FRONTEND
+        profile = {"Arn": "example-profile"}
+        pago = {"VpcId": "vpc-test", "IamInstanceProfile": profile}
+        candidate = dict(pago, InstanceId=instance_id, State={"Name": "running"}, Architecture="x86_64",
+                         Tags=[{"Key": "Name", "Value": fidelizacion.LEGACY_NAME}],
+                         SecurityGroups=[{"GroupId": "sg-original"}])
+        online = {"InstanceInformationList": [{"PingStatus": "Online", "PlatformName": "Amazon Linux"}]}
+        with patch.object(fidelizacion, "instances", return_value=[candidate]), \
+                patch.object(fidelizacion, "aws", side_effect=[online, {}, {}]) as aws, \
+                patch.object(fidelizacion, "check_frontend_traffic"), patch.object(fidelizacion, "check_existing_ingress"), \
+                patch.object(fidelizacion, "prepare_database", side_effect=host.RolloutError("DB pendiente")) as prepare, \
+                patch.object(fidelizacion, "open_to_alb", return_value="sg-new") as group, \
+                patch.object(fidelizacion, "run_service") as run, patch.object(fidelizacion, "attach") as attach:
+            with self.assertRaisesRegex(host.RolloutError, "DB pendiente"):
+                fidelizacion.reuse_frontend(pago, "listener", {}, None)
+            group.assert_not_called()
+            run.assert_not_called()
+            attach.assert_not_called()
+            self.assertEqual(aws.call_count, 1)
+            aws.side_effect = iter([online, {}, {}])
+            prepare.side_effect = None
+            fidelizacion.reuse_frontend(pago, "listener", {}, None)
+        self.assertEqual(aws.call_args_list[-2].args, ("ec2", "modify-instance-attribute", "--instance-id",
+                         instance_id, "--groups", "sg-new", "sg-original"))
+        self.assertEqual(aws.call_args_list[-1].args, ("ec2", "create-tags", "--resources", instance_id,
+                         "--tags", f"Key={fidelizacion.SERVICE_TAG},Value={fidelizacion.NAME}"))
+        run.assert_called_once_with(candidate, "deploy")
+        attach.assert_called_once_with(candidate, pago, "listener")
+
+    def test_reuse_enrolls_only_the_reviewed_frontend_instance(self):
+        pago = {"VpcId": "vpc-test"}
+        candidate = dict(pago, InstanceId=fidelizacion.LEGACY_FRONTEND, State={"Name": "running"},
+                         Tags=[{"Key": "Name", "Value": fidelizacion.LEGACY_NAME},
+                               {"Key": fidelizacion.SERVICE_TAG, "Value": fidelizacion.NAME}])
+        other = dict(candidate, InstanceId="i-0123456789abcdef0")
+        with patch.object(fidelizacion, "instances", side_effect=[[candidate, other], [candidate], [other]]):
+            self.assertIs(fidelizacion.select_instance(pago), candidate)
+            self.assertIs(fidelizacion.select_instance(pago, candidate["InstanceId"]), candidate)
+            with self.assertRaisesRegex(host.RolloutError, "EC2 de Fidelización"):
+                fidelizacion.select_instance(pago, other["InstanceId"])
+
     def test_dedicated_tls_database_and_kafka_endpoints(self):
         config = {"FIDELIZACION_DB_URL": "jdbc:postgresql://db.example.test:5432/fidelizacion?sslmode=require",
                   "FIDELIZACION_DB_USER": "fidelizacion", "FIDELIZACION_DB_PASSWORD": "test-only",

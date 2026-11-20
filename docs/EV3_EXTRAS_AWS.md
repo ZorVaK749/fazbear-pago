@@ -181,6 +181,27 @@ aws cloudtrail lookup-events --region us-east-1 \
   --output table
 ```
 
+El inventario de la cuenta mostró nueve EC2 en ejecución. La instancia
+`ec2-frontend` (`i-0644c1d2ca954f9aa`) comparte el VPC de Pago y está
+`Online` en SSM. Para alojar allí Fidelización, verificar el checkout
+Fargate y la desconexión del Target Group anterior y ejecutar el
+despliegue en un paso desde CloudShell.
+
+```bash
+cd "$HOME/pedidos360-ops-pago" &&
+git pull --ff-only origin ev3/webpay-integracion &&
+python3 deploy/aws/fidelizacion.py --reuse-frontend
+```
+
+El modo verifica que la instancia esté fuera de los grupos conectados a
+balanceadores, comprueba que el puerto 8089 no tenga entrada pública y
+prepara PostgreSQL. Añade el grupo de seguridad de Fidelización a la
+lista de grupos existentes, etiqueta el destino y levanta su contenedor.
+Conserva los discos, el nombre y los contenedores existentes. El
+operador necesita además `ecs:DescribeServices`,
+`ssm:DescribeInstanceInformation`, `ec2:ModifyInstanceAttribute` y
+`ec2:CreateTags`. `--verify` puede comprobar el servicio en esa EC2.
+
 Para reintentar con el laboratorio activo, indicar el ID de la instancia
 que se confirmó terminada. `--retry-ec2` conserva una instancia dedicada
 existente o solicita una sola EC2 por ID anterior y espera que arranque.

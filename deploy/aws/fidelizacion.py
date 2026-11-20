@@ -12,11 +12,16 @@ import warnings
 
 from clp_productos import python_request
 from fidelizacion_host import PARAMETER, PORT, validate_config
+from frontend_image import FAMILY as FRONTEND_SERVICE, verify_checkout
 from webpay import ACCOUNT, INSTANCE as PAGO, RolloutError, aws, private_ip, run_ssm, wait_for_target
 
 NAME = "fazbear-fidelizacion"
 PROJECT = "Pedidos360-EV3"
 LAUNCH_TOKEN = "pedidos360-ev3-fidelizacion-v1"
+LEGACY_FRONTEND = "i-0644c1d2ca954f9aa"
+LEGACY_NAME = "ec2-frontend"
+LEGACY_TG = "fazbear-tg-frontend"
+SERVICE_TAG = "Pedidos360EV3Service"
 GROUP = "fazbear-fidelizacion-alb"
 TG = "fazbear-tg-fidelizacion"
 API = "uuzifgcyd2"
@@ -41,21 +46,33 @@ def one(values, message):
     return values[0]
 
 
+def instance_tags(record):
+    return {entry["Key"]: entry["Value"] for entry in record.get("Tags", [])}
+
+
+def reused_frontend(record, tags):
+    return record["InstanceId"] == LEGACY_FRONTEND and tags.get(SERVICE_TAG) == NAME
+
+
 def select_instance(pago, instance_id=None):
     if instance_id:
         record = one(instances(**{"instance-id": instance_id}),
                      f"AWS no muestra un registro único para {instance_id}.")
         require_running(record)
-        tags = {entry["Key"]: entry["Value"] for entry in record.get("Tags", [])}
+        tags = instance_tags(record)
         token = record.get("ClientToken", "")
         launch_matches = re.fullmatch(rf"{re.escape(LAUNCH_TOKEN)}(?:-i-[0-9a-f]{{17}})?", token) is not None
-        known = (tags.get("Name") == NAME and tags.get("Project") == PROJECT) or launch_matches
+        dedicated = (tags.get("Name") == NAME and tags.get("Project") == PROJECT) or (
+            launch_matches and tags.get("Name", NAME) == NAME and tags.get("Project", PROJECT) == PROJECT)
         if (record["InstanceId"] != instance_id or instance_id == PAGO or record.get("VpcId") != pago["VpcId"]
-                or tags.get("Name", NAME) != NAME or tags.get("Project", PROJECT) != PROJECT or not known):
+                or not (dedicated or reused_frontend(record, tags))):
             raise RolloutError(f"AWS no identifica {instance_id} como EC2 de Fidelización en el VPC de Pago.")
         return record
-    records = instances(**{"vpc-id": pago["VpcId"], "tag:Name": NAME,
-                           "instance-state-name": "pending,running,stopping,stopped"})
+    records = []
+    for record in instances(**{"vpc-id": pago["VpcId"], "instance-state-name": "pending,running,stopping,stopped"}):
+        tags = instance_tags(record)
+        if tags.get("Name") == NAME or reused_frontend(record, tags):
+            records.append(record)
     if len(records) > 1:
         raise RolloutError("Hay más de una EC2 activa o detenida con el nombre de Fidelización.")
     return records[0] if records else None
@@ -240,6 +257,68 @@ def prepare_database(node):
             failure="La preparación de PostgreSQL quedó pendiente. Revise la salida de SSM.")
 
 
+def check_frontend_traffic(node):
+    services = aws("ecs", "describe-services", "--cluster", "pedidos360-ev3-infra", "--services", FRONTEND_SERVICE)
+    frontend = one(services["services"], "No se encontró el frontend de EV3 en ECS.")
+    providers = {entry["capacityProvider"] for entry in frontend.get("capacityProviderStrategy", [])}
+    fargate = frontend.get("launchType") == "FARGATE" or (providers and providers <= {"FARGATE", "FARGATE_SPOT"})
+    if (frontend["status"] != "ACTIVE" or not fargate
+            or frontend["runningCount"] != frontend["desiredCount"] or not frontend["runningCount"]):
+        raise RolloutError("El frontend principal debe estar activo en Fargate.")
+    verify_checkout()
+    target_ids = {LEGACY_FRONTEND, node["PrivateIpAddress"]}
+    for group in aws("elbv2", "describe-target-groups")["TargetGroups"]:
+        name = group["TargetGroupName"]
+        if not group["LoadBalancerArns"] or name == TG:
+            continue
+        if name == LEGACY_TG:
+            raise RolloutError(f"El Target Group {LEGACY_TG} sigue asociado a un balanceador.")
+        health = aws("elbv2", "describe-target-health", "--target-group-arn", group["TargetGroupArn"])
+        if any(target["Target"]["Id"] in target_ids for target in health["TargetHealthDescriptions"]):
+            raise RolloutError(f"La EC2 anterior sigue registrada en el grupo activo {name}.")
+    print("Frontend Fargate verificado. La EC2 anterior está fuera de los grupos con balanceador.", flush=True)
+
+
+def check_existing_ingress(groups):
+    response = aws("ec2", "describe-security-groups", "--group-ids", *sorted(groups))
+    for group in response["SecurityGroups"]:
+        for rule in group["IpPermissions"]:
+            protocol = rule["IpProtocol"]
+            if protocol == "-1" or (protocol in {"tcp", "6"} and rule["FromPort"] <= PORT <= rule["ToPort"]):
+                if (any(entry["CidrIp"] == "0.0.0.0/0" for entry in rule.get("IpRanges", []))
+                        or any(entry["CidrIpv6"] == "::/0" for entry in rule.get("Ipv6Ranges", []))):
+                    raise RolloutError(f"El grupo {group['GroupId']} permite acceso público al puerto {PORT}.")
+
+
+def reuse_frontend(pago, listener, alb, existing):
+    if existing and existing["InstanceId"] != LEGACY_FRONTEND:
+        raise RolloutError("Ya existe otra EC2 de Fidelización. Use --verify o --deploy.")
+    node = one(instances(**{"instance-id": LEGACY_FRONTEND}), "No se encontró la EC2 del frontend anterior.")
+    require_running(node)
+    tags = instance_tags(node)
+    profile = (pago.get("IamInstanceProfile") or {}).get("Arn")
+    if (node["InstanceId"] != LEGACY_FRONTEND or node.get("VpcId") != pago["VpcId"]
+            or node.get("Architecture") != "x86_64" or tags.get("Name") != LEGACY_NAME
+            or tags.get(SERVICE_TAG, NAME) != NAME or not profile
+            or (node.get("IamInstanceProfile") or {}).get("Arn") != profile):
+        raise RolloutError("La EC2 anterior difiere del inventario esperado de EV3.")
+    managed = aws("ssm", "describe-instance-information", "--filters", f"Key=InstanceIds,Values={LEGACY_FRONTEND}")
+    info = one(managed["InstanceInformationList"], "SSM todavía no muestra la EC2 del frontend anterior.")
+    if info["PingStatus"] != "Online" or info["PlatformName"] != "Amazon Linux":
+        raise RolloutError("La EC2 anterior debe estar Online en SSM y usar Amazon Linux.")
+    check_frontend_traffic(node)
+    groups = {group["GroupId"] for group in node["SecurityGroups"]}
+    check_existing_ingress(groups)
+    prepare_database(node)
+    group = open_to_alb(pago, alb)
+    if group not in groups:
+        aws("ec2", "modify-instance-attribute", "--instance-id", LEGACY_FRONTEND, "--groups", *sorted(groups | {group}))
+    if not reused_frontend(node, tags):
+        aws("ec2", "create-tags", "--resources", LEGACY_FRONTEND, "--tags", f"Key={SERVICE_TAG},Value={NAME}")
+    run_service(node, "deploy")
+    attach(node, pago, listener)
+
+
 def attach(node, pago, listener, verify_only=False):
     groups = [g for g in aws("elbv2", "describe-target-groups")["TargetGroups"] if g["TargetGroupName"] == TG]
     if groups:
@@ -303,7 +382,7 @@ def rule_priority(rules, arn):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     flags = parser.add_mutually_exclusive_group(required=True)
-    for mode in ("plan", "create-ec2", "prepare-db", "set-config", "deploy", "verify"):
+    for mode in ("plan", "create-ec2", "prepare-db", "set-config", "deploy", "verify", "reuse-frontend"):
         flags.add_argument("--" + mode, dest="mode", action="store_const", const=mode)
     flags.add_argument("--retry-ec2", metavar="INSTANCE_ID", help="Reintenta después de una EC2 terminada y espera su arranque.")
     parser.add_argument("--instance-id", metavar="INSTANCE_ID", help="Selecciona la EC2 ya creada por ID en lugar de buscarla por etiqueta.")
@@ -324,6 +403,8 @@ def main():
             wait_for_ec2(retry_ec2(pago, alb, node, args.retry_ec2))
         elif args.mode == "prepare-db":
             prepare_database(node)
+        elif args.mode == "reuse-frontend":
+            reuse_frontend(pago, listener, alb, node)
         elif args.mode in {"deploy", "verify"}:
             run_service(node, args.mode)
             attach(node, pago, listener, verify_only=args.mode == "verify")
