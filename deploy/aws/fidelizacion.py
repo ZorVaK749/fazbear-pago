@@ -145,13 +145,18 @@ def retry_ec2(pago, alb, existing, previous_id):
         raise RolloutError("Ingrese el ID de la EC2 terminada de Fidelización.")
     if existing:
         return create_ec2(pago, alb, existing)
-    previous = one(instances(**{"instance-id": previous_id}),
-                   "AWS ya no muestra la instancia anterior. Revise el historial del laboratorio.")
-    tags = {entry["Key"]: entry["Value"] for entry in previous.get("Tags", [])}
-    if (tags.get("Name") != NAME or tags.get("Project") != PROJECT or previous.get("VpcId") != pago["VpcId"]
-            or previous["State"]["Name"] != "terminated"):
-        raise RolloutError("El ID debe pertenecer a una EC2 terminada de Fidelización en este VPC.")
-    print(f"Fidelización anterior {previous_id} · {previous.get('StateReason', {}).get('Code', 'terminated')}", flush=True)
+    records = instances(**{"instance-id": previous_id})
+    if records:
+        previous = one(records, "AWS devolvió más de un registro para la EC2 anterior.")
+        tags = {entry["Key"]: entry["Value"] for entry in previous.get("Tags", [])}
+        vpc = previous.get("VpcId")
+        if (previous["State"]["Name"] != "terminated" or (vpc and vpc != pago["VpcId"])
+                or tags.get("Name", NAME) != NAME or tags.get("Project", PROJECT) != PROJECT):
+            raise RolloutError("El ID debe pertenecer a una EC2 terminada de Fidelización en este VPC.")
+        reason = previous.get("StateReason", {}).get("Code", "terminated")
+        print(f"Fidelización anterior {previous_id} · {reason}", flush=True)
+    else:
+        print(f"AWS ya no lista {previous_id}. Se usa el ID indicado para identificar este reintento.", flush=True)
     return create_ec2(pago, alb, None, client_token=f"{LAUNCH_TOKEN}-{previous_id}")
 
 

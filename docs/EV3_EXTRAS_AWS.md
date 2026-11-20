@@ -173,10 +173,13 @@ las 02:03:25 UTC. EC2 registró `Client.UserInitiatedShutdown`. El historial
 de AWS CloudTrail, si el laboratorio permite consultarlo, permite revisar
 el evento `TerminateInstances` y su origen.
 
-Para reintentar con el laboratorio activo, indicar el ID terminado
-mientras AWS aún exponga su estado. `--retry-ec2` conserva una instancia
-dedicada existente o solicita una sola EC2 por ID anterior y espera que
-arranque. Si vuelve a terminar, muestra el motivo de AWS.
+Para reintentar con el laboratorio activo, indicar el ID de la instancia
+que se confirmó terminada. `--retry-ec2` conserva una instancia dedicada
+existente o solicita una sola EC2 por ID anterior y espera que arranque.
+Comprueba el estado y los metadatos que AWS aún publica sobre el ID
+anterior. Si AWS ya lo retiró de su inventario, el ID indicado por el
+operador identifica el intento. Si la nueva instancia vuelve a terminar,
+el script muestra el motivo de AWS.
 
 ```bash
 python3 deploy/aws/fidelizacion.py --retry-ec2 i-05bbd23de4ff0bdea

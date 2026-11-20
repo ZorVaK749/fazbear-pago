@@ -72,6 +72,24 @@ class FidelizacionTest(unittest.TestCase):
                 fidelizacion.retry_ec2(pago, {}, None, instance_id)
         create.assert_called_once_with(pago, {}, None, client_token=f"{fidelizacion.LAUNCH_TOKEN}-{instance_id}")
 
+    def test_retry_accepts_a_terminated_record_without_network_or_tags_and_an_expired_record(self):
+        instance_id = "i-0123456789abcdef0"
+        pago = {"VpcId": "vpc-test"}
+        for records in ([{"State": {"Name": "terminated"}}], []):
+            with self.subTest(records=records), patch.object(fidelizacion, "instances", return_value=records), \
+                    patch.object(fidelizacion, "create_ec2", return_value="i-new") as create, \
+                    redirect_stdout(io.StringIO()):
+                self.assertEqual(fidelizacion.retry_ec2(pago, {}, None, instance_id), "i-new")
+                create.assert_called_once_with(pago, {}, None, client_token=f"{fidelizacion.LAUNCH_TOKEN}-{instance_id}")
+
+    def test_retry_rejects_a_previous_instance_that_is_still_running(self):
+        previous = {"State": {"Name": "running"}}
+        with patch.object(fidelizacion, "instances", return_value=[previous]), \
+                patch.object(fidelizacion, "create_ec2") as create:
+            with self.assertRaisesRegex(host.RolloutError, "EC2 terminada de Fidelización"):
+                fidelizacion.retry_ec2({}, {}, None, "i-0123456789abcdef0")
+        create.assert_not_called()
+
     def test_retry_reuses_the_active_instance_even_if_the_old_record_has_expired(self):
         with patch.object(fidelizacion, "aws") as aws, redirect_stdout(io.StringIO()):
             target = fidelizacion.retry_ec2({}, {}, {"InstanceId": "i-existing"}, "i-0123456789abcdef0")
