@@ -127,6 +127,20 @@ python3 deploy/aws/frontend_image.py --apply --image \
 - [x] Confirmar estable en ECS la revisión `:5` de Fargate con el digest de recuperación.
 - [ ] Conciliar el intento de 25.980 CLP y confirmar el pedido asociado.
 
+Para investigar ese intento desde CloudShell, usar una consulta de solo
+lectura a Pago, Transbank de integración y la cotización en Orden:
+
+```bash
+python3 deploy/aws/webpay_payment_status.py --payment-id ID_DEL_INTENTO
+```
+
+La consulta muestra el estado local, la evidencia de retorno y el
+resultado de Transbank. Si las referencias coinciden y Transbank confirma
+`AUTHORIZED` con código `0`, verificar el mismo intento desde el checkout
+para terminar la conciliación. Ante un error o estado incierto, conservar
+el registro para evitar un pedido o pago duplicado. El diagnóstico de
+Orden requiere `psql` en su EC2.
+
 El catálogo de FazCoins conserva los endpoints protegidos de Fidelización.
 Si un GET autenticado recibe `404 Ruta no encontrada`, comprobar la regla
 del listener y el Target Group de Fidelización antes de publicar cambios

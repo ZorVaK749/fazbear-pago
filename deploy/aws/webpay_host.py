@@ -448,7 +448,7 @@ class Host:
         return result == b"t"
 
 
-def postgres_env(lines):
+def postgres_env(lines, *, prefix="PAGO"):
     values = env_values(lines)
     supported = {"SPRING_DATASOURCE_URL", "SPRING_DATASOURCE_USERNAME", "SPRING_DATASOURCE_PASSWORD"}
     java_variables = {"JAVA_TOOL_OPTIONS", "JDK_JAVA_OPTIONS", "_JAVA_OPTIONS"}
@@ -479,7 +479,7 @@ def postgres_env(lines):
     if blockers:
         raise RolloutError("La configuración PostgreSQL requiere verificación manual por: "
                            + ", ".join(sorted(set(blockers))) + ".")
-    jdbc = values.get("SPRING_DATASOURCE_URL", values.get("PAGO_DB_URL", ""))
+    jdbc = values.get("SPRING_DATASOURCE_URL", values.get(f"{prefix}_DB_URL", ""))
     if not jdbc.startswith("jdbc:postgresql://"):
         raise RolloutError("Se requiere una URL PostgreSQL inequívoca para el rollback.")
     uri = urllib.parse.urlsplit(jdbc[5:])
@@ -490,8 +490,8 @@ def postgres_env(lines):
             or not re.fullmatch(r"[A-Za-z0-9_.-]+", db) or uri.username or uri.password or uri.fragment
             or set(options) - {"sslmode"} or sslmode not in (["require"], ["verify-ca"], ["verify-full"])):
         raise RolloutError("La URL PostgreSQL incluye opciones que requieren verificación manual.")
-    user = values.get("SPRING_DATASOURCE_USERNAME", values.get("PAGO_DB_USER"))
-    password = values.get("SPRING_DATASOURCE_PASSWORD", values.get("PAGO_DB_PASSWORD"))
+    user = values.get("SPRING_DATASOURCE_USERNAME", values.get(f"{prefix}_DB_USER"))
+    password = values.get("SPRING_DATASOURCE_PASSWORD", values.get(f"{prefix}_DB_PASSWORD"))
     if not user or not password:
         raise RolloutError("Falta configuración PostgreSQL para el rollback.")
     env = {key: value for key, value in os.environ.items() if not key.startswith("PG")}
