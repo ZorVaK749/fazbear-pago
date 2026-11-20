@@ -125,7 +125,8 @@ python3 deploy/aws/frontend_image.py --apply --image \
 - [x] Respaldar los registros de Pago y comprobar su SHA256.
 - [x] Confirmar Pago con Flyway V5, Webpay de integración activo y Target Group healthy.
 - [x] Confirmar estable en ECS la revisión `:5` de Fargate con el digest de recuperación.
-- [ ] Conciliar el intento de 25.980 CLP y confirmar el pedido asociado.
+- [x] Consultar el intento de 25.980 CLP en Pago, Transbank y Orden.
+- [ ] Confirmar en AWS el cierre del intento vencido y la vuelta al checkout.
 
 Para investigar ese intento desde CloudShell, usar una consulta de solo
 lectura a Pago, Transbank de integración y la cotización en Orden:
@@ -153,10 +154,26 @@ de resultado, con monto y referencias coincidentes. Se conserva el
 historial del intento. El checkout ofrece volver para una nueva cotización
 cuando recibe `EXPIRED`.
 
-Para instalar el cambio de Pago, usar `webpay_release.py --apply
---migration 6 --image` con el digest publicado. El comando comprueba
-Flyway V5 antes del cambio, guarda un respaldo y valida V6 y el Target
-Group al terminar.
+Desde CloudShell, instalar Pago V6 y el frontend que interpreta
+`EXPIRED`. Pago comprueba V5 antes del cambio, guarda un respaldo
+y valida V6 y el Target Group al terminar.
+
+```bash
+cd "$HOME/pedidos360-ops-pago" &&
+git pull --ff-only origin ev3/webpay-integracion &&
+python3 deploy/aws/webpay_release.py --apply --migration 6 --image \
+  ghcr.io/zorvak749/fazbear-pago@sha256:55b7339291e1f8453d19ab75623978dcf42a342517a0236671564f20665cee0d &&
+python3 deploy/aws/frontend_image.py --apply --image \
+  ghcr.io/zorvak749/fazbears-frontend@sha256:02b89a1406e4f1c9773ca5847ba3341083054d2073f8a6b988dc5c8ed04fb238
+```
+
+Con ambas imágenes activas, recargar la pestaña que conserva el intento,
+pulsar **Verificar el mismo pago** si sigue disponible y confirmar el
+mensaje de vencimiento y la vuelta al checkout.
+
+[CI de Pago V6](https://github.com/ZorVaK749/fazbear-pago/actions/runs/44671595477)
+· [CI de Angular](https://github.com/ZorVaK749/fazbears-frontend/actions/runs/44671606376)
+· [Integración EV3](https://github.com/ZorVaK749/fazbear-pago/actions/runs/44671595425)
 
 El catálogo de FazCoins conserva los endpoints protegidos de Fidelización.
 Si un GET autenticado recibe `404 Ruta no encontrada`, comprobar la regla
