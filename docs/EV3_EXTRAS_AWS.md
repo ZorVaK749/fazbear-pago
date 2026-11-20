@@ -135,8 +135,23 @@ verificación de Webpay.
 
 El inventario del stage confirmó las cuatro rutas de Fidelización en
 `integrations/qamokas`. La búsqueda por el puerto 8089 no encontró un Target
-Group. Queda pendiente identificar el destino de Fidelización en el
-balanceador, EC2 o ECS.
+Group. Las búsquedas por nombre de Fidelización y FazCoins no encontraron
+un Target Group, una instancia EC2 etiquetada o un servicio en el clúster
+`pedidos360-ev3-infra`. Queda pendiente asignar una EC2 al microservicio.
+
+Para desplegarlo, usar la imagen verificada
+`ghcr.io/zorvak749/fazbear-fidelizacion@sha256:627283e9b8b68869ecd9ec8498bdf9423e9ef68e13f9f7c052eff486bd33b2c0`
+con el perfil `ev3-aws`. Se puede reutilizar el servidor RDS actual con una
+base y un usuario dedicados a Fidelización, y el broker Kafka de EV3.
+Configurar `FIDELIZACION_DB_URL`, `FIDELIZACION_DB_USER`,
+`FIDELIZACION_DB_PASSWORD`, `KAFKA_BOOTSTRAP_SERVERS`, `PAGO_URL`
+y la clave compartida `INTERNAL_SERVICE_KEY` mediante el entorno privado
+de la EC2. Publicar el puerto 8089 del host hacia el 8080 del contenedor.
+Una vez confirmado `GET /health`, registrar la instancia en un Target Group
+con health check `/health` y enlazar las rutas al destino mediante una regla
+del listener interno. Verificar saldo, movimientos y recompensas con sesión
+iniciada y usar un pago simulado para comprobar el abono de FazCoins.
+[CI de Fidelización](https://github.com/ZorVaK749/fazbear-fidelizacion/actions/runs/44362087350)
 
 ## DynamoDB y dashboard
 
