@@ -200,6 +200,24 @@ del listener y el Target Group de Fidelización antes de publicar cambios
 en el Gateway. La UI informa indisponibilidad de FazCoins sin cambiar la
 verificación de Webpay.
 
+### Recomendaciones, navegación e historial en CLP
+
+- [x] Mostrar recomendaciones con las tarjetas del catálogo y ocultar estrategia, fecha de cálculo y motivo interno.
+- [x] Compactar la navegación y habilitar el menú de cuenta con acceso a Perfil y Configuración.
+- [x] Excluir del historial y de los totales del perfil los pedidos con importes fraccionarios. La API de Pedidos omite la moneda histórica, así que se usan el total y los precios unitarios para identificar los ejemplos heredados. Los pedidos siguen registrados en la base.
+- [x] Verificar 134 pruebas de Angular, la compilación y el manifiesto publicado en GHCR.
+- [ ] Aplicar la imagen a Fargate y verificar con sesión iniciada `Mi actividad`, `Mi perfil`, `Configuración de cuenta` y el pedido `#65` en `Mis pedidos`.
+- [ ] Confirmar que un archivo JavaScript inexistente devuelve HTTP 404 mientras las rutas del frontend siguen sirviendo el documento de Angular.
+
+```bash
+cd "$HOME/pedidos360-ops-pago" &&
+git pull --ff-only origin ev3/webpay-integracion &&
+python3 deploy/aws/frontend_image.py --apply --image \
+  ghcr.io/zorvak749/fazbears-frontend@sha256:77a21b84629487aa8133316f02b267d7e68feb089596fc7d045375c7f5316c0e
+```
+
+[CI y publicación del frontend](https://github.com/ZorVaK749/fazbears-frontend/actions/runs/44748929352)
+
 ### Estado de Fidelización en AWS
 
 Despliegue confirmado en `ec2-frontend` (`i-0644c1d2ca954f9aa`) con
