@@ -1,10 +1,15 @@
 from contextlib import redirect_stdout
+import gzip
 import io
+import json
 import os
 from pathlib import Path
+import subprocess
 import sys
+import tempfile
 import unittest
 from unittest.mock import patch
+import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import fidelizacion
@@ -258,6 +263,36 @@ class FidelizacionTest(unittest.TestCase):
         self.assertTrue(all(call.args[1].strip().startswith("SELECT") for call in psql.call_args_list))
         put.assert_not_called()
 
+    def test_rds_admin_reads_only_the_managed_secret_for_the_pago_endpoint(self):
+        connection = {"PGHOST": "db.example.test", "PGPORT": "5432", "PGUSER": "pago"}
+        instance = {"Engine": "postgres", "Endpoint": {"Address": connection["PGHOST"], "Port": 5432},
+                    "MasterUsername": "admin", "MasterUserSecret": {"SecretArn": "approved-rds-secret"}}
+        credential = {"username": "admin", "password": "private-test-value"}
+        with patch.object(db, "aws_json", side_effect=[{"DBInstances": [instance]},
+                                                      {"SecretString": json.dumps(credential)}]) as aws, \
+                redirect_stdout(io.StringIO()) as output:
+            admin = db.managed_admin(connection)
+        self.assertEqual(admin["PGPASSWORD"], credential["password"])
+        self.assertEqual(aws.call_args.args[0], ["secretsmanager", "get-secret-value", "--secret-id", "approved-rds-secret"])
+        self.assertEqual(output.getvalue(), "")
+        instance.pop("MasterUserSecret")
+        with patch.object(db, "aws_json", return_value={"DBInstances": [instance]}) as aws:
+            with self.assertRaisesRegex(host.RolloutError, "--stage-db-admin"):
+                db.managed_admin(connection)
+        self.assertEqual(aws.call_count, 1)
+
+    def test_stages_a_bundle_for_an_interactive_prompt(self):
+        source = gzip.compress(json.dumps([("fidelizacion_db", "def main(args):\n    return 0\n")]).encode())
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "private" / "admin.pyz"
+            subprocess.run([sys.executable, "-c", fidelizacion.ADMIN_LOADER, str(path)],
+                           input=source, capture_output=True, check=True)
+            with zipfile.ZipFile(path) as archive:
+                script = archive.read("__main__.py").decode()
+                compile(script, "__main__.py", "exec")
+                self.assertIn("interactive-admin", script)
+            subprocess.run([sys.executable, str(path)], capture_output=True, check=True)
+
     @unittest.skipUnless(os.environ.get("FIDELIZACION_TEST_POSTGRES"), "Requiere PostgreSQL desechable de CI")
     def test_postgres_bootstraps_the_existing_empty_database_without_changing_its_owner(self):
         password = os.environ["FIDELIZACION_TEST_POSTGRES"]
@@ -276,11 +311,16 @@ class FidelizacionTest(unittest.TestCase):
             return real_psql(dict(environment, PGSSLMODE="disable"), sql, failure, **kwargs)
 
         ci_psql(dict(connection, PGDATABASE="postgres"), "CREATE DATABASE fidelizacion;", "Faltó la base de prueba.")
+        ci_psql(dict(connection, PGDATABASE="postgres"),
+                "CREATE ROLE pago_fixture LOGIN PASSWORD 'test-pago-fixture-only';", "Faltó el rol de prueba de Pago.")
+        pago = dict(connection, PGUSER="pago_fixture", PGPASSWORD="test-pago-fixture-only")
         with patch.object(db, "stored_config", side_effect=lambda: saved), \
                 patch.object(db, "put_config", side_effect=keep_config) as put, \
                 patch.object(db, "psql", side_effect=ci_psql):
+            with self.assertRaisesRegex(host.RolloutError, "--prepare-db-admin"):
+                db.bootstrap(pago, values)
             db.bootstrap(connection, values)
-            db.bootstrap(connection, values)
+            db.bootstrap(pago, values)
         put.assert_called_once()
         app = dict(connection, PGUSER="fidelizacion", PGDATABASE="fidelizacion",
                    PGPASSWORD=saved["FIDELIZACION_DB_PASSWORD"])

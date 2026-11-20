@@ -35,13 +35,13 @@ def request(mode, address="127.0.0.1"):
                           540 if mode == "apply" else 180)
 
 
-def python_request(instance, comment, modules, arguments, timeout):
+def python_request(instance, comment, modules, arguments, timeout, *, loader=LOADER):
     source = Path(__file__).parent
     scripts = [(name, (source / (name + ".py")).read_text(encoding="utf-8")) for name in modules]
     bundle = base64.b64encode(gzip.compress(json.dumps(scripts).encode(), mtime=0)).decode()
     commands = ["exec bash -s <<'PEDIDOS360_CLP'", "set -euo pipefail", "umask 077", "{"]
     commands.extend(f"printf %s '{bundle[i:i + 2000]}'" for i in range(0, len(bundle), 2000))
-    commands += [f"}} | base64 -d | python3 -c {shlex.quote(LOADER)} {shlex.join(arguments)}", "PEDIDOS360_CLP"]
+    commands += [f"}} | base64 -d | python3 -c {shlex.quote(loader)} {shlex.join(arguments)}", "PEDIDOS360_CLP"]
     return {
         "DocumentName": "AWS-RunShellScript",
         "InstanceIds": [instance],

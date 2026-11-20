@@ -22,6 +22,24 @@ LEGACY_FRONTEND = "i-0644c1d2ca954f9aa"
 LEGACY_NAME = "ec2-frontend"
 LEGACY_TG = "fazbear-tg-frontend"
 SERVICE_TAG = "Pedidos360EV3Service"
+ADMIN_PATH = "/var/lib/pedidos360-fidelizacion-db/admin.pyz"
+ADMIN_LOADER = r"""
+import gzip, json, os, sys, tempfile, zipfile
+from pathlib import Path
+path = Path(sys.argv[1])
+path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+with tempfile.NamedTemporaryFile(dir=path.parent, delete=False) as staged:
+    temporary = Path(staged.name)
+try:
+    with zipfile.ZipFile(temporary, "w", zipfile.ZIP_DEFLATED) as archive:
+        for name, source in json.loads(gzip.decompress(sys.stdin.buffer.read())):
+            archive.writestr(name + ".py", source)
+        archive.writestr("__main__.py", "from fidelizacion_db import main\nraise SystemExit(main(['interactive-admin']))\n")
+    os.replace(temporary, path)
+finally:
+    temporary.unlink(missing_ok=True)
+print(f"En la sesión interactiva de Pago, ejecute: sudo python3 {path}", flush=True)
+""".strip()
 GROUP = "fazbear-fidelizacion-alb"
 TG = "fazbear-tg-fidelizacion"
 API = "uuzifgcyd2"
@@ -254,9 +272,11 @@ def prepare_database(node):
     database_command()
 
 
-def database_command(*arguments):
+def database_command(*arguments, stage=False):
+    request_options = {"loader": ADMIN_LOADER} if stage else {}
     request = python_request(PAGO, "Pedidos360 PostgreSQL de Fidelizacion",
-                             ("webpay_host", "fidelizacion_host", "fidelizacion_db"), arguments, 160)
+                             ("webpay_host", "fidelizacion_host", "fidelizacion_db"),
+                             (ADMIN_PATH,) if stage else arguments, 160, **request_options)
     run_ssm(request, PAGO, timeout=210,
             failure="La preparación de PostgreSQL quedó pendiente. Revise la salida de SSM.")
 
@@ -386,7 +406,8 @@ def rule_priority(rules, arn):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     flags = parser.add_mutually_exclusive_group(required=True)
-    for mode in ("plan", "create-ec2", "inspect-db", "prepare-db", "set-config", "deploy", "verify", "reuse-frontend"):
+    for mode in ("plan", "create-ec2", "inspect-db", "prepare-db", "prepare-db-admin", "stage-db-admin",
+                 "set-config", "deploy", "verify", "reuse-frontend"):
         flags.add_argument("--" + mode, dest="mode", action="store_const", const=mode)
     flags.add_argument("--retry-ec2", metavar="INSTANCE_ID", help="Reintenta después de una EC2 terminada y espera su arranque.")
     parser.add_argument("--instance-id", metavar="INSTANCE_ID", help="Selecciona la EC2 ya creada por ID en lugar de buscarla por etiqueta.")
@@ -402,6 +423,12 @@ def main():
             return 0
         if args.mode == "inspect-db":
             database_command("inspect")
+            return 0
+        if args.mode == "prepare-db-admin":
+            database_command("managed-admin")
+            return 0
+        if args.mode == "stage-db-admin":
+            database_command(stage=True)
             return 0
         pago, listener, alb, node = inventory(args.instance_id)
         if args.mode == "create-ec2":

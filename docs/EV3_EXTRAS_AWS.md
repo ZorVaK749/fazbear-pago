@@ -244,6 +244,41 @@ Es de solo lectura y no muestra credenciales ni registros de clientes.
 python3 deploy/aws/fidelizacion.py --inspect-db
 ```
 
+Si Pago no es propietario y no hay configuración autorizada, intentar
+la preparación con el secreto maestro ya administrado por RDS.
+
+```bash
+python3 deploy/aws/fidelizacion.py --prepare-db-admin &&
+python3 deploy/aws/fidelizacion.py --reuse-frontend
+```
+
+El perfil de Pago necesita `rds:DescribeDBInstances`,
+`secretsmanager:GetSecretValue` sobre el secreto maestro correspondiente
+y `kms:Decrypt` si usa una clave de cliente. El script usa las credenciales
+en memoria y guarda en Parameter Store únicamente la configuración del
+usuario dedicado de Fidelización.
+
+Si RDS no tiene un secreto maestro accesible, publicar el mismo asistente
+en la EC2 de Pago y abrir una sesión interactiva con un administrador
+autorizado. CloudShell prepara el asistente con `--stage-db-admin`.
+
+```bash
+python3 deploy/aws/fidelizacion.py --stage-db-admin
+```
+
+En EC2, seleccionar `i-0241836a7e45a2e3f` y abrir **Conectar → Session
+Manager**. El operador necesita acceso a esa sesión y a `sudo` en la
+instancia. Dentro de la sesión, ejecutar:
+
+```bash
+sudo python3 /var/lib/pedidos360-fidelizacion-db/admin.pyz
+```
+
+El asistente solicita el usuario y la contraseña del propietario en
+prompts ocultos. Tras verificar PostgreSQL, ejecutar `--reuse-frontend`
+desde CloudShell. Si la base contiene objetos, el propietario debe
+revisar los permisos vigentes antes de definir el usuario del servicio.
+
 Si el usuario de Pago carece de privilegios de creación o de asignación
 del propietario, o el perfil no puede escribir en Parameter Store,
 preparar la base desde una sesión administrativa PostgreSQL autorizada

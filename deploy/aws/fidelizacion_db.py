@@ -1,6 +1,7 @@
 """Prepare the dedicated PostgreSQL database through the existing Pago EC2."""
 
 import base64
+import getpass
 import hashlib
 import hmac
 import json
@@ -9,6 +10,7 @@ from pathlib import Path
 import secrets
 import subprocess
 import sys
+import warnings
 from urllib.parse import parse_qs, urlsplit
 
 from fidelizacion_host import PARAMETER, role_environment, validate_config
@@ -110,6 +112,46 @@ def inspect_database(connection):
     print(json.dumps(summary, indent=2), flush=True)
 
 
+def aws_json(arguments, failure):
+    result = subprocess.run(["aws", "--region", "us-east-1", "--no-cli-pager", "--output", "json", *arguments],
+                            env=role_environment(), capture_output=True, timeout=30)
+    if result.returncode:
+        raise RolloutError(failure)
+    return json.loads(result.stdout)
+
+
+def managed_admin(connection):
+    described = aws_json(["rds", "describe-db-instances"],
+                         "El perfil de Pago no pudo consultar RDS. Use --stage-db-admin con un administrador autorizado.")
+    candidates = [db for db in described["DBInstances"] if db["Engine"] == "postgres"
+                  and db.get("Endpoint", {}).get("Address") == connection["PGHOST"]
+                  and db["Endpoint"]["Port"] == int(connection["PGPORT"])]
+    if len(candidates) != 1:
+        raise RolloutError("No se encontró el RDS exacto de Pago. Use --stage-db-admin con un administrador autorizado.")
+    database = candidates[0]
+    secret_id = (database.get("MasterUserSecret") or {}).get("SecretArn")
+    if not secret_id:
+        raise RolloutError("RDS no informa un secreto maestro administrado. Use --stage-db-admin.")
+    result = aws_json(["secretsmanager", "get-secret-value", "--secret-id", secret_id],
+                      "El perfil de Pago no pudo leer el secreto maestro de RDS. Use --stage-db-admin.")
+    secret = json.loads(result["SecretString"])
+    if secret.get("username") != database["MasterUsername"] or not secret.get("password"):
+        raise RolloutError("El secreto administrado no coincide con el usuario maestro de ese RDS.")
+    return dict(connection, PGUSER=secret["username"], PGPASSWORD=secret["password"])
+
+
+def admin_prompt(connection):
+    if not sys.stdin.isatty():
+        raise RolloutError("Abra una sesión interactiva de Session Manager en la EC2 de Pago.")
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", getpass.GetPassWarning)
+        username = getpass.getpass("Usuario administrador de RDS (oculto): ").strip()
+        password = getpass.getpass("Contraseña de RDS (oculta): ")
+    if not username or not password or username == connection["PGUSER"]:
+        raise RolloutError("Se requiere una cuenta de RDS autorizada para administrar Fidelización.")
+    return dict(connection, PGUSER=username, PGPASSWORD=password)
+
+
 def verify_existing(admin, config, values):
     address, port = validate_config(config)
     uri = urlsplit(config["FIDELIZACION_DB_URL"].removeprefix("jdbc:"))
@@ -154,7 +196,8 @@ def bootstrap(connection, values):
             if not reusable_empty or (config["FIDELIZACION_DB_URL"], config["FIDELIZACION_DB_USER"]) != (jdbc, DATABASE):
                 raise
     if foreign_owner and not reusable_empty:
-        raise RolloutError("La base existente requiere sus credenciales y permisos vigentes. Use --inspect-db y --set-config.")
+        raise RolloutError("La base existente requiere sus credenciales y permisos vigentes. "
+                           "Use --prepare-db-admin o --stage-db-admin con el propietario, o --set-config si ya tiene un usuario autorizado.")
     if (role != "t" and create_role != "t") or (owner == "-" and create_database != "t"):
         raise RolloutError("El usuario de Pago no puede crear roles y bases. Se requiere el administrador de RDS.")
     if config is None:
@@ -206,7 +249,7 @@ def bootstrap(connection, values):
 def main(args):
     os.umask(0o077)
     try:
-        if args not in ([], ["inspect"]) or not Path("/var/run/docker.sock").is_socket():
+        if args not in ([], ["inspect"], ["managed-admin"], ["interactive-admin"]) or not Path("/var/run/docker.sock").is_socket():
             raise RolloutError("La preparación de la base debe ejecutarse en la EC2 de Pago.")
         host = Host()
         host.state_dir = Path("/var/lib/pedidos360-fidelizacion-db")
@@ -217,14 +260,18 @@ def main(args):
                 raise RolloutError("Se requiere el contenedor activo oficial de Pago.")
             variables = pago["Config"]["Env"]
             connection = postgres_env(variables)
-            if args:
+            if args == ["inspect"]:
                 inspect_database(connection)
             else:
+                if args == ["managed-admin"]:
+                    connection = managed_admin(connection)
+                elif args == ["interactive-admin"]:
+                    connection = admin_prompt(connection)
                 bootstrap(connection, env_values(variables))
     except RolloutError as error:
         print(f"ERROR: {error}", file=sys.stderr)
         return 1
-    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
+    except (OSError, ValueError, KeyError, TypeError, EOFError, getpass.GetPassWarning, subprocess.SubprocessError):
         print("ERROR: No se pudo preparar PostgreSQL con la configuración privada de Pago.", file=sys.stderr)
         return 1
     return 0
