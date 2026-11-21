@@ -250,7 +250,7 @@ El stage `ev3` conserva las cuatro rutas JWT en `integrations/qamokas`.
 - [x] Comprobar desde la EC2 PostgreSQL por TCP/5432, Kafka por TCP/9092 y el health de Pago por HTTP/8087.
 - [x] Confirmar HTTP 200 en `/health` y comprobar el digest del contenedor.
 - [x] Confirmar el Target Group healthy en dos observaciones separadas por al menos 30 s.
-- [ ] Confirmar con sesión iniciada que el checkout muestra saldo, movimientos y recompensas.
+- [x] Confirmar con sesión iniciada que el checkout muestra saldo, movimientos y recompensas. Se observó saldo de 0 Fz, movimientos vacíos e Insignia Faz VIP por 100 Fz. El canje devolvió 422 por saldo insuficiente.
 - [ ] Confirmar un movimiento `AWARD` de un pago simulado aprobado en CLP.
 
 Para la validación de solo lectura, abrir el checkout y pulsar
