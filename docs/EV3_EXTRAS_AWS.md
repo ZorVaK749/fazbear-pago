@@ -206,8 +206,9 @@ verificación de Webpay.
 - [x] Compactar la navegación y habilitar el menú de cuenta con acceso a Perfil y Configuración.
 - [x] Excluir del historial y de los totales del perfil los pedidos con importes fraccionarios. La API de Pedidos omite la moneda histórica, así que se usan el total y los precios unitarios para identificar los ejemplos heredados. Los pedidos siguen registrados en la base.
 - [x] Verificar 134 pruebas de Angular, la compilación y el manifiesto publicado en GHCR.
-- [ ] Aplicar la imagen a Fargate y verificar con sesión iniciada `Mi actividad`, `Mi perfil`, `Configuración de cuenta` y el pedido `#65` en `Mis pedidos`.
-- [ ] Confirmar que un archivo JavaScript inexistente devuelve HTTP 404 mientras las rutas del frontend siguen sirviendo el documento de Angular.
+- [x] Confirmar Fargate estable en la revisión `:9` y comprobar el botón Webpay en el checkout público.
+- [x] Comprobar HTTP 200 en `/perfil`, `/actividad`, `/pedidos` y `/checkout`, y HTTP 404 al solicitar el archivo Angular anterior `chunk-Y7KOawDr.js`.
+- [ ] Verificar con sesión iniciada `Mi actividad`, `Mi perfil`, `Configuración de cuenta` y el pedido `#65` en `Mis pedidos`.
 
 ```bash
 cd "$HOME/pedidos360-ops-pago" &&
