@@ -219,6 +219,23 @@ python3 deploy/aws/frontend_image.py --apply --image \
 
 [CI y publicación del frontend](https://github.com/ZorVaK749/fazbears-frontend/actions/runs/44748929352)
 
+### Hora de Santiago en Mis pedidos
+
+Pedidos registra `fecha_creacion` mediante `LOCALTIMESTAMP` para compras confirmadas y la API serializa el valor sin desplazamiento. En el despliegue EV3 la hora observada corresponde a UTC. El frontend la convierte a `America/Santiago` para mostrarla en formato de 24 horas. Los registros existentes conservan sus valores.
+
+- [x] Verificar en CI 135 pruebas, incluida la conversión de `01:06 UTC` del 21 de noviembre a `22:06` del día anterior en Santiago.
+- [x] Verificar el manifiesto de la nueva imagen en GHCR.
+- [ ] Aplicar la imagen en Fargate y confirmar que el pedido `#97` muestre `20 nov 2026, 22:06` con sesión iniciada.
+
+```bash
+cd "$HOME/pedidos360-ops-pago" &&
+git pull --ff-only origin ev3/webpay-integracion &&
+python3 deploy/aws/frontend_image.py --apply --image \
+  ghcr.io/zorvak749/fazbears-frontend@sha256:1edf966790467c7b9fc5f37c5420bb23d453bfbd2dcb880eb9fe55a098560e53
+```
+
+[CI y publicación de la corrección](https://github.com/ZorVaK749/fazbears-frontend/actions/runs/44848399825)
+
 ### Estado de Fidelización en AWS
 
 Despliegue confirmado en `ec2-frontend` (`i-0644c1d2ca954f9aa`) con
