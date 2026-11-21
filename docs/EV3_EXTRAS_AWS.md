@@ -225,7 +225,8 @@ Pedidos registra `fecha_creacion` mediante `LOCALTIMESTAMP` para compras confirm
 
 - [x] Verificar en CI 135 pruebas, incluida la conversión de `01:06 UTC` del 21 de noviembre a `22:06` del día anterior en Santiago.
 - [x] Verificar el manifiesto de la nueva imagen en GHCR.
-- [ ] Aplicar la imagen en Fargate y confirmar que el pedido `#97` muestre `20 nov 2026, 22:06` con sesión iniciada.
+- [x] Confirmar Fargate estable en la revisión `:10` y verificar que `/pedidos` sirve el módulo con `America/Santiago` y formato de 24 horas.
+- [ ] Confirmar que el pedido `#97` muestre `20 nov 2026, 22:06` con sesión iniciada.
 
 ```bash
 cd "$HOME/pedidos360-ops-pago" &&
