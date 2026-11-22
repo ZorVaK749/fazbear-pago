@@ -487,6 +487,12 @@ procedimiento prepara rutas explícitas y un deployment del stage `ev3`
 usando la integración existente de Fargate. El ingreso anterior permanece
 disponible durante la transición de Entra y Webpay.
 
+Fargate quedó estable en la revisión `:14`. CloudShell confirmó un
+deployment del stage `ev3` con rutas explícitas y se verificó
+públicamente el checkout y su módulo Webpay mediante el prefijo `/ev3/`.
+Queda probar la redirección con Entra y el retorno de Pago antes del retiro
+de `$default`.
+
 1. Agregar `https://p5gsy16utd.execute-api.us-east-1.amazonaws.com/ev3/`
    a **Redirect URIs** de tipo **Single-page application** en el registro
    de la aplicación Entra. Conservar la URI actual durante las pruebas.
