@@ -226,7 +226,7 @@ Pedidos registra `fecha_creacion` mediante `LOCALTIMESTAMP` para compras confirm
 - [x] Verificar en CI 135 pruebas, incluida la conversión de `01:06 UTC` del 21 de noviembre a `22:06` del día anterior en Santiago.
 - [x] Verificar el manifiesto de la nueva imagen en GHCR.
 - [x] Confirmar Fargate estable en la revisión `:10` y verificar que `/pedidos` sirve el módulo con `America/Santiago` y formato de 24 horas.
-- [ ] Confirmar que el pedido `#97` muestre `20 nov 2026, 22:06` con sesión iniciada.
+- [x] Confirmar que el pedido `#97` muestre `20 nov 2026, 22:06` con sesión iniciada. Se observó en **Mis pedidos** el 22 de noviembre.
 
 ```bash
 cd "$HOME/pedidos360-ops-pago" &&
@@ -507,9 +507,11 @@ python3 deploy/aws/frontend_image.py --apply --image \
 python3 deploy/aws/frontend_gateway.py --prepare
 ```
 
-3. Abrir la URL con `/ev3/`, iniciar y cerrar sesión, recargar Catálogo
-   y abrir Checkout y Mis pedidos. Comprobar que todas las páginas
-   conservan el prefijo `/ev3/`.
+3. Abrir `/ev3/` en una ventana privada e iniciar sesión. En **Menú**,
+   añadir un producto si el carrito está vacío. Pulsar **Carrito** arriba
+   a la derecha y **Proceder al pago** al pie del panel. Comprobar
+   `/ev3/checkout` y, desde **Mis pedidos**, `/ev3/pedidos`. Cerrar sesión
+   desde el menú de perfil y confirmar que la redirección conserva `/ev3/`.
 4. Con la sesión validada, configurar el retorno nuevo de Pago y probar
    una compra Webpay de integración. El script exige que el stage
    nombrado esté desplegado y sirva Angular antes de enviar cambios a Pago.
