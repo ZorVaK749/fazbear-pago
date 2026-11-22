@@ -541,6 +541,11 @@ hora de Santiago, estado, contador de la ventana y presencia de alerta.
 Para una serie aislada de cuatro intentos en diez segundos, el cuarto debe
 quedar `BLOCKED`, con contador 4 y alerta registrada.
 
+El 22 de noviembre se observó en el checkout de AWS una secuencia de tres
+rechazos simulados (`201`) seguida por dos bloqueos (`429`). La respuesta
+del primer bloqueo indicó `BLOCKED` y `simulacion: true`. Queda verificar
+el contador de la ventana y la alerta con la consulta de Pago.
+
 ## DynamoDB y dashboard
 
 El 22 de noviembre, el navegador obtuvo HTTP 200 en el resumen autenticado
