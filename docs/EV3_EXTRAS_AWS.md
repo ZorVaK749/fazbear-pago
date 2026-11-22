@@ -274,9 +274,9 @@ de la EC2. El puerto 8089 del host apunta al 8080 del contenedor.
 El checkout muestra el concepto, el importe en Fz y la hora de Santiago.
 Los códigos del servicio y los identificadores internos quedan fuera de la
 vista. Las 135 pruebas de Angular pasaron y el manifiesto se verificó en
-GHCR. Fargate quedó estable en la revisión `:11` y el módulo público del
-checkout incluye el historial corregido. Queda confirmar con sesión iniciada
-la vista del abono existente **Abono por compra simulada · +675 Fz**.
+GHCR. Fargate quedó estable en la revisión `:11`. Con sesión iniciada se
+confirmó la vista del movimiento **Abono por compra simulada · +675 Fz**,
+con fecha **22 nov 2026, 18:42** y saldo disponible de 675 Fz.
 
 ```bash
 cd "$HOME/pedidos360-ops-pago" &&
