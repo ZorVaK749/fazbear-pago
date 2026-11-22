@@ -35,3 +35,13 @@ class ClpInventoryTest(unittest.TestCase):
         script = re.search(r"'([A-Za-z0-9+/=]+)'", wrapper)[1]
         self.assertEqual(gzip.decompress(base64.b64decode(script)), Path(host.__file__).read_bytes())
         self.assertTrue(wrapper.endswith("python3 - productos fazbears-productos 8081"))
+
+    def test_dashboard_status_checks_analytics_without_printing_urls(self):
+        request = clp_inventory.request("analytics")
+        self.assertEqual(request["InstanceIds"], ["i-049081f7c46b5aba3"])
+        self.assertTrue(request["Parameters"]["commands"][0].endswith("python3 - analytics fazbear-analytics-recommendations 8088"))
+        self.assertIn("sin configurar · URL WSS: ausente", host.dashboard_settings(self.container()))
+        enabled = self.container(["ANALYTICS_DASHBOARD_ENABLED=true",
+                                  "ANALYTICS_DASHBOARD_WSS_URL=wss://private.example/ws/analytics"])
+        self.assertEqual(host.dashboard_settings(enabled),
+                         "Dashboard WebSocket · variable Docker: activado · URL WSS: presente")

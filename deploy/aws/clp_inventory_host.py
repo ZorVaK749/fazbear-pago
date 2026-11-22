@@ -59,6 +59,14 @@ def datasource(container, service):
     return "sin confirmar", False
 
 
+def dashboard_settings(container):
+    env = dict(item.split("=", 1) for item in container["Config"]["Env"] if "=" in item)
+    flag = env.get("ANALYTICS_DASHBOARD_ENABLED", "").strip().lower()
+    estado = {"true": "activado", "false": "desactivado", "": "sin configurar"}.get(flag, "valor no reconocido")
+    url = "presente" if env.get("ANALYTICS_DASHBOARD_WSS_URL", "").strip() else "ausente"
+    return f"Dashboard WebSocket · variable Docker: {estado} · URL WSS: {url}"
+
+
 def main(service, package, port):
     container = target(package, int(port))
     if not container:
@@ -75,6 +83,8 @@ def main(service, package, port):
         print(f"Origen de datos: {storage}")
         if service == "productos" and not persistent:
             print("Se requiere una exportación verificable de la base antes de reemplazar Productos.")
+    if service == "analytics":
+        print(dashboard_settings(container))
     return 0
 
 

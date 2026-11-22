@@ -16,6 +16,7 @@ SERVICES = {
     "carrito": ("i-0c29438f2236c5b39", "fazbear-carrito", 8083),
     "orden": ("i-0affb4cde24db3e39", "fazbear-orden", 8084),
     "notificaciones": ("i-0ab7a0bdce7b6cb9c", "fazbear-notificaciones", 8085),
+    "analytics": ("i-049081f7c46b5aba3", "fazbear-analytics-recommendations", 8088),
 }
 
 

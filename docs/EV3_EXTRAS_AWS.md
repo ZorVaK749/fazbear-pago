@@ -515,6 +515,27 @@ python3 deploy/aws/frontend_image.py --apply --image \
 
 ## DynamoDB y dashboard
 
+El 22 de noviembre, el navegador obtuvo HTTP 200 en el resumen autenticado
+y HTTP 403 en `POST /api/analytics/me/dashboard-ticket`. La ruta del ticket
+depende de `ANALYTICS_DASHBOARD_ENABLED` en Analytics. El valor por defecto
+de ese perfil es desactivado. El frontend de AWS consulta el resumen y
+reserva la solicitud de tickets para una compilación con
+`analyticsLiveEnabled` activado.
+
+La corrección del frontend también cierra el menú de perfil al pulsar
+fuera. Tras actualizar Fargate, el inventario de Analytics indica si el
+contenedor declara el flag y la URL WSS.
+
+```bash
+cd "$HOME/pedidos360-ops-pago" &&
+git pull --ff-only origin ev3/webpay-integracion &&
+python3 deploy/aws/frontend_image.py --apply --image \
+  ghcr.io/zorvak749/fazbears-frontend@sha256:d5200675d9719223dac3f57654b64a432d928410edbeb07b92e117d7d86bc14c &&
+python3 deploy/aws/clp_inventory.py --service analytics
+```
+
+[CI de la corrección del menú y del ticket](https://github.com/ZorVaK749/fazbears-frontend/actions/runs/45076758861)
+
 Analytics aplica Flyway V2 en su PostgreSQL. PostgreSQL mantiene la proyección
 de recomendaciones. Solo al habilitar DynamoDB, el consumo de Kafka encola
 el historial normalizado de interacciones en la misma transacción que las
