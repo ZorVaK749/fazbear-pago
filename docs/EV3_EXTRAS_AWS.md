@@ -479,6 +479,39 @@ y permisos de Run Command. El perfil de la EC2 requiere acceso SSM y lectura
 del SecureString con descifrado. Si un permiso del laboratorio falta, el
 comando indica la operación AWS que falló.
 
+## Validación de Kafka desde Mi actividad
+
+El resumen autenticado de **Mi actividad** consulta
+`GET /api/analytics/me/resumen`. Los contadores corresponden a
+interacciones que Analytics ya guardó después de consumir los eventos.
+El Gateway devuelve 401 sin sesión y admite desde el frontend el
+preflight del GET con `Authorization`.
+
+1. Con sesión iniciada, abrir **Mi actividad** y anotar **Vistas de productos**
+   y **Productos agregados al carrito**.
+2. En el menú, pulsar el nombre de un producto y añadir una unidad de un
+   producto que todavía no esté en ese carrito.
+3. Volver a **Mi actividad**, pulsar **Actualizar resumen** y comparar.
+   Cada contador debería aumentar en uno. Si la proyección tarda, esperar
+   unos segundos y volver a consultar el resumen.
+4. Registrar los valores antes y después. En otra sesión de prueba, los
+   eventos de esta cuenta deben quedar fuera de sus contadores.
+
+El resumen usa la API HTTP. La sección **Actividad en vivo** conserva
+su conexión WSS y tiene una verificación propia.
+
+La imagen pasó 137 pruebas de Angular. Falta aplicarla en Fargate y
+registrar los contadores antes y después de las acciones autenticadas.
+
+```bash
+cd "$HOME/pedidos360-ops-pago" &&
+git pull --ff-only origin ev3/webpay-integracion &&
+python3 deploy/aws/frontend_image.py --apply --image \
+  ghcr.io/zorvak749/fazbears-frontend@sha256:174fe8463a195bcf321f28a4582e63dacaeeb0c0730df7476ed6c6fe2225d298
+```
+
+[CI del resumen de actividad](https://github.com/ZorVaK749/fazbears-frontend/actions/runs/45075375541)
+
 ## DynamoDB y dashboard
 
 Analytics aplica Flyway V2 en su PostgreSQL. PostgreSQL mantiene la proyección
