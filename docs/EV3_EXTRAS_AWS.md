@@ -505,8 +505,14 @@ La imagen pasó 137 pruebas de Angular. Fargate quedó estable en la revisión
 El 22 de noviembre, con la revisión `:13`, el navegador mostró HTTP 200
 en el resumen, HTTP 202 en el POST de interacciones de Productos y HTTP
 200 al añadir una unidad al carrito. El carrito con productos y sus
-controles fueron utilizables con F12 acoplado abajo. Queda comparar los
-contadores de Analytics después de esas acciones para comprobar su consumo.
+controles fueron utilizables con F12 acoplado abajo.
+
+El resumen autenticado, actualizado después de añadir el producto, pasó
+de **42 a 44 interacciones**, de **13 a 14 selecciones del catálogo** y
+de **11 a 12 adiciones al carrito**. Las vistas siguieron en 3. Esto
+confirma el consumo de un evento de selección de Productos y uno de
+adición de Carrito en Analytics a través de Kafka. Queda verificar el
+efecto sobre las recomendaciones y repetir con otra cuenta de prueba.
 
 ```bash
 cd "$HOME/pedidos360-ops-pago" &&
