@@ -479,6 +479,53 @@ y permisos de Run Command. El perfil de la EC2 requiere acceso SSM y lectura
 del SecureString con descifrado. Si un permiso del laboratorio falta, el
 comando indica la operación AWS que falló.
 
+## Stage ev3 del frontend
+
+La entrega debe abrir en `https://p5gsy16utd.execute-api.us-east-1.amazonaws.com/ev3/`.
+La ruta y el stage `$default` del Gateway se revisan por separado. El
+procedimiento prepara rutas explícitas y un deployment del stage `ev3`
+usando la integración existente de Fargate. El ingreso anterior permanece
+disponible durante la transición de Entra y Webpay.
+
+1. Agregar `https://p5gsy16utd.execute-api.us-east-1.amazonaws.com/ev3/`
+   a **Redirect URIs** de tipo **Single-page application** en el registro
+   de la aplicación Entra. Conservar la URI actual durante las pruebas.
+2. Desplegar Angular y preparar el stage de API Gateway desde CloudShell.
+
+```bash
+cd "$HOME/pedidos360-ops-pago" &&
+git pull --ff-only origin ev3/webpay-integracion &&
+python3 deploy/aws/frontend_gateway.py --dry-run &&
+python3 deploy/aws/frontend_image.py --apply --image \
+  ghcr.io/zorvak749/fazbears-frontend@sha256:8777fd9e09bf073f505814a70e9cadfca6f01b88f016e11da1d096252947e686 &&
+python3 deploy/aws/frontend_gateway.py --prepare
+```
+
+3. Abrir la URL con `/ev3/`, iniciar y cerrar sesión, recargar Catálogo
+   y abrir Checkout y Mis pedidos. Comprobar que todas las páginas
+   conservan el prefijo `/ev3/`.
+4. Con la sesión validada, configurar el retorno nuevo de Pago y probar
+   una compra Webpay de integración. El script exige que el stage
+   nombrado esté desplegado y sirva Angular antes de enviar cambios a Pago.
+   La base permanece en Flyway V6.
+
+```bash
+cd "$HOME/pedidos360-ops-pago" &&
+python3 deploy/aws/webpay_release.py --apply --migration 6 --return-stage ev3 --image \
+  ghcr.io/zorvak749/fazbear-pago@sha256:2a4c4fca0fe4b6895e0308609fea76c545879fb271e030d83ad4e6a74136dd19
+```
+
+5. Confirmar el retorno del navegador a `/ev3/checkout/webpay` y el
+   recibo **Pago efectuado**. Comprobar también una cancelación. Una vez
+   conciliadas las transacciones iniciadas con la URL anterior, revisar
+   el retiro de la ruta y del stage `$default` por separado y comprobar
+   el acceso público por `/ev3/`. Después del retiro, usar
+   `frontend_image.py --verify --stage ev3` en las verificaciones.
+
+[CI de Angular](https://github.com/ZorVaK749/fazbears-frontend/actions/runs/45081570779)
+· [CI de Pago](https://github.com/ZorVaK749/fazbear-pago/actions/runs/45081571579)
+· [CI de scripts AWS](https://github.com/ZorVaK749/fazbear-pago/actions/runs/45081692779)
+
 ## Validación de Kafka desde Mi actividad
 
 El resumen autenticado de **Mi actividad** consulta
