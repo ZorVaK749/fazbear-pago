@@ -5,8 +5,10 @@ import argparse
 import re
 import sys
 import time
+from urllib.error import HTTPError, URLError
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
-from frontend_image import fetch, verify_checkout
+from frontend_image import ORIGIN, fetch, verify_checkout
 from webpay import ACCOUNT, RolloutError, aws
 
 API = "p5gsy16utd"
@@ -16,6 +18,27 @@ ROUTES = (
     "GET /reportes", "GET /checkout", "GET /checkout/webpay", "GET /actividad",
     "GET /{archivo}", "POST /checkout/webpay",
 )
+
+
+class NoRedirect(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def verify_post_return(prefix):
+    request = Request(ORIGIN + prefix + "/checkout/webpay", data=b"TBK_TOKEN=synthetic-probe",
+                      headers={"Content-Type": "application/x-www-form-urlencoded"})
+    try:
+        with build_opener(NoRedirect()).open(request, timeout=8):
+            pass
+    except HTTPError as error:
+        with error:
+            if error.code == 303 and error.headers.get("Location") == "webpay#TBK_TOKEN=synthetic-probe":
+                return
+            raise RolloutError(f"El retorno POST de Webpay en {prefix} respondió HTTP {error.code} sin la redirección esperada.") from None
+    except (URLError, TimeoutError):
+        raise RolloutError(f"No se pudo comprobar el retorno POST de Webpay en {prefix}.") from None
+    raise RolloutError(f"El retorno POST de Webpay en {prefix} no devolvió HTTP 303.")
 
 
 def inventory():
@@ -58,7 +81,8 @@ def verify_named_stage():
         if "<app-root" not in html or "/ev3/" not in html:
             raise RolloutError(f"{prefix}{path} no sirve la imagen Angular preparada para el stage.")
     verify_checkout(prefix)
-    print(f"Stage {STAGE} · páginas Angular, módulos de checkout y retorno Webpay accesibles por HTTPS.")
+    verify_post_return(prefix)
+    print(f"Stage {STAGE} · páginas Angular, módulos de checkout y retorno POST de Webpay verificados por HTTPS.")
 
 
 def wait_for_stage(timeout=75):

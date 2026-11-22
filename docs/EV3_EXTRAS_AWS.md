@@ -490,8 +490,11 @@ disponible durante la transición de Entra y Webpay.
 Fargate quedó estable en la revisión `:14`. CloudShell confirmó un
 deployment del stage `ev3` con rutas explícitas y se verificó
 públicamente el checkout y su módulo Webpay mediante el prefijo `/ev3/`.
-Queda probar la redirección con Entra y el retorno de Pago antes del retiro
-de `$default`.
+La revisión `:14` devuelve HTTP 405 al POST de retorno. Transbank envía el
+formulario por POST al anular la compra en integración. La corrección de
+Angular y Nginx mantiene el stage al redirigir al checkout y pasa los
+campos del formulario al navegador en un fragmento temporal. El retorno
+GET de una compra aprobada sigue el flujo existente. [Documentación de Transbank](https://github.com/TransbankDevelopers/transbank-developers-docs/blob/master/documentacion/webpay-plus/README.md#resumen-de-flujos)
 
 1. Agregar `https://p5gsy16utd.execute-api.us-east-1.amazonaws.com/ev3/`
    a **Redirect URIs** de tipo **Single-page application** en el registro
@@ -503,9 +506,14 @@ cd "$HOME/pedidos360-ops-pago" &&
 git pull --ff-only origin ev3/webpay-integracion &&
 python3 deploy/aws/frontend_gateway.py --dry-run &&
 python3 deploy/aws/frontend_image.py --apply --image \
-  ghcr.io/zorvak749/fazbears-frontend@sha256:8777fd9e09bf073f505814a70e9cadfca6f01b88f016e11da1d096252947e686 &&
+  ghcr.io/zorvak749/fazbears-frontend@sha256:b83a0c7bd4db18ef65de682203e0947c775b5218f4734329c7d9d424d3561c59 &&
 python3 deploy/aws/frontend_gateway.py --prepare
 ```
+
+Con el stage `ev3` ya preparado, usar `--apply --stage ev3` en
+`frontend_image.py` y `--verify` en `frontend_gateway.py`. La prueba del
+contenedor en CI comprueba el retorno GET y la redirección POST en ambas
+rutas, así como el rechazo de campos repetidos.
 
 3. Abrir `/ev3/` en una ventana privada e iniciar sesión. En **Menú**,
    añadir un producto si el carrito está vacío. Pulsar **Carrito** arriba
@@ -514,7 +522,9 @@ python3 deploy/aws/frontend_gateway.py --prepare
    desde el menú de perfil y confirmar que la redirección conserva `/ev3/`.
 4. Con la sesión validada, configurar el retorno nuevo de Pago y probar
    una compra Webpay de integración. El script exige que el stage
-   nombrado esté desplegado y sirva Angular antes de enviar cambios a Pago.
+   nombrado esté desplegado, sirva Angular y redirija el POST de retorno
+   con HTTP 303 antes de enviar cambios a Pago. La prueba usa un formulario
+   sintético y termina en la redirección, sin consultar transacciones.
    La base permanece en Flyway V6.
 
 ```bash
@@ -530,7 +540,7 @@ python3 deploy/aws/webpay_release.py --apply --migration 6 --return-stage ev3 --
    el acceso público por `/ev3/`. Después del retiro, usar
    `frontend_image.py --verify --stage ev3` en las verificaciones.
 
-[CI de Angular](https://github.com/ZorVaK749/fazbears-frontend/actions/runs/45081570779)
+[CI de Angular y Nginx](https://github.com/ZorVaK749/fazbears-frontend/actions/runs/45085027149)
 · [CI de Pago](https://github.com/ZorVaK749/fazbear-pago/actions/runs/45081571579)
 · [CI de scripts AWS](https://github.com/ZorVaK749/fazbear-pago/actions/runs/45081692779)
 

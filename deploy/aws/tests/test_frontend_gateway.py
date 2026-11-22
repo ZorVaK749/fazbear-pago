@@ -4,6 +4,7 @@ from pathlib import Path
 import sys
 import unittest
 from unittest.mock import patch
+from urllib.error import HTTPError
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import frontend_gateway as gateway
@@ -39,10 +40,29 @@ class FrontendGatewayTests(unittest.TestCase):
         stages = {"ev3": {"DeploymentId": "approvable"}}
         with patch.object(gateway, "inventory", return_value=(routes, stages, self.target)), \
                 patch.object(gateway, "fetch", return_value="<app-root></app-root><script>'/ev3/'</script>") as fetch, \
-                patch.object(gateway, "verify_checkout") as checkout, redirect_stdout(io.StringIO()):
+                patch.object(gateway, "verify_checkout") as checkout, \
+                patch.object(gateway, "verify_post_return") as return_post, redirect_stdout(io.StringIO()):
             gateway.execute("verify")
         self.assertIn("/ev3/checkout/webpay", [call.args[0] for call in fetch.call_args_list])
         checkout.assert_called_once_with("/ev3")
+        return_post.assert_called_once_with("/ev3")
+
+    def test_post_return_requires_an_internal_redirect_and_never_follows_it(self):
+        for status, location in ((303, "webpay#TBK_TOKEN=synthetic-probe"), (405, ""),
+                                 (303, "https://other.example/webpay")):
+            with self.subTest(status=status, location=location), patch.object(gateway, "build_opener") as opener:
+                opener.return_value.open.side_effect = HTTPError(
+                    "https://example.test/ev3/checkout/webpay", status, "", {"Location": location}, io.BytesIO()
+                )
+                if location == "webpay#TBK_TOKEN=synthetic-probe":
+                    gateway.verify_post_return("/ev3")
+                else:
+                    with self.assertRaisesRegex(gateway.RolloutError, f"HTTP {status}"):
+                        gateway.verify_post_return("/ev3")
+                request = opener.return_value.open.call_args.args[0]
+                self.assertEqual(request.get_method(), "POST")
+                self.assertEqual(request.data, b"TBK_TOKEN=synthetic-probe")
+        self.assertIsNone(gateway.NoRedirect().redirect_request(None, None, 303, "", {}, "https://other.example"))
 
     def test_default_fallback_response_does_not_certify_the_named_stage(self):
         with patch.object(gateway, "inventory", return_value=({}, {"$default": {}}, self.target)), \
