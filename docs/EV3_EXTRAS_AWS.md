@@ -523,8 +523,10 @@ reserva la solicitud de tickets para una compilación con
 `analyticsLiveEnabled` activado.
 
 La corrección del frontend también cierra el menú de perfil al pulsar
-fuera. Tras actualizar Fargate, el inventario de Analytics indica si el
-contenedor declara el flag y la URL WSS.
+fuera. La revisión `:13` de Fargate quedó estable y sirve la corrección
+junto con el resumen de actividad. El inventario SSM de `ev3-analytics`
+encontró el flag sin configurar y la URL WSS ausente. La vista en vivo
+queda pendiente de habilitación y el resumen HTTP sigue disponible.
 
 ```bash
 cd "$HOME/pedidos360-ops-pago" &&
