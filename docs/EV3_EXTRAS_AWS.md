@@ -543,8 +543,12 @@ quedar `BLOCKED`, con contador 4 y alerta registrada.
 
 El 22 de noviembre se observó en el checkout de AWS una secuencia de tres
 rechazos simulados (`201`) seguida por dos bloqueos (`429`). La respuesta
-del primer bloqueo indicó `BLOCKED` y `simulacion: true`. Queda verificar
-el contador de la ventana y la alerta con la consulta de Pago.
+del primer bloqueo indicó `BLOCKED` y `simulacion: true`. La consulta de
+Pago por SSM confirmó que los tres rechazos dejaron los contadores en 1,
+2 y 3. El cuarto intento llegó **7,051 segundos** después del primero,
+quedó `BLOCKED` con contador **4** y guardó su alerta. El quinto fue un
+intento distinto, también bloqueado, con contador **5** y su propia alerta.
+La idempotencia al repetir una misma operación está cubierta en CI.
 
 ## DynamoDB y dashboard
 
