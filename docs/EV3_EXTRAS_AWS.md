@@ -502,7 +502,11 @@ su conexión WSS y tiene una verificación propia.
 
 La imagen pasó 137 pruebas de Angular. Fargate quedó estable en la revisión
 `:12` y `/actividad` sirve el módulo con el resumen y los contadores nuevos.
-Queda registrar los valores antes y después de las acciones autenticadas.
+El 22 de noviembre, con la revisión `:13`, el navegador mostró HTTP 200
+en el resumen, HTTP 202 en el POST de interacciones de Productos y HTTP
+200 al añadir una unidad al carrito. El carrito con productos y sus
+controles fueron utilizables con F12 acoplado abajo. Queda comparar los
+contadores de Analytics después de esas acciones para comprobar su consumo.
 
 ```bash
 cd "$HOME/pedidos360-ops-pago" &&
