@@ -35,8 +35,18 @@ class FrontendGatewayTests(unittest.TestCase):
         aws.assert_not_called()
 
     def test_verify_checks_named_stage_paths_and_lazy_checkout_assets(self):
-        with patch.object(gateway, "fetch", return_value="<app-root></app-root><script>'/ev3/'</script>") as fetch, \
+        routes = {key: {"AuthorizationType": "NONE", "Target": self.target} for key in gateway.ROUTES}
+        stages = {"ev3": {"DeploymentId": "approvable"}}
+        with patch.object(gateway, "inventory", return_value=(routes, stages, self.target)), \
+                patch.object(gateway, "fetch", return_value="<app-root></app-root><script>'/ev3/'</script>") as fetch, \
                 patch.object(gateway, "verify_checkout") as checkout, redirect_stdout(io.StringIO()):
             gateway.execute("verify")
         self.assertIn("/ev3/checkout/webpay", [call.args[0] for call in fetch.call_args_list])
         checkout.assert_called_once_with("/ev3")
+
+    def test_default_fallback_response_does_not_certify_the_named_stage(self):
+        with patch.object(gateway, "inventory", return_value=({}, {"$default": {}}, self.target)), \
+                patch.object(gateway, "fetch") as fetch:
+            with self.assertRaisesRegex(gateway.RolloutError, "despliegue ev3"):
+                gateway.execute("verify")
+        fetch.assert_not_called()

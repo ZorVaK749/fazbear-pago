@@ -49,6 +49,9 @@ def missing_routes(routes, target):
 
 
 def verify_named_stage():
+    routes, stages, target = inventory()
+    if not stages.get(STAGE, {}).get("DeploymentId") or missing_routes(routes, target):
+        raise RolloutError("El Gateway todavía no tiene un despliegue ev3 con las rutas explícitas.")
     prefix = "/" + STAGE
     for path in ("/", "/login", "/catalogo", "/perfil", "/checkout/webpay", "/actividad"):
         html = fetch(prefix + path)
