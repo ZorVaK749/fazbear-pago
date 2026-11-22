@@ -523,6 +523,24 @@ python3 deploy/aws/frontend_image.py --apply --image \
 
 [CI del resumen de actividad](https://github.com/ZorVaK749/fazbears-frontend/actions/runs/45075375541)
 
+## Consulta de antifraude simulado
+
+Si el navegador muestra un `201` con estado `DECLINED`, Pago registró un
+rechazo del simulador. Los `204` de las solicitudes `OPTIONS` pertenecen al
+preflight CORS. Tomar el `pagoId` de ese `POST /api/pagos` como referencia.
+
+```bash
+cd "$HOME/pedidos360-ops-pago" &&
+git pull --ff-only origin ev3/webpay-integracion &&
+python3 deploy/aws/webpay_payment_status.py --antifraude --payment-id UUID_DEL_PAGO_SIMULADO
+```
+
+La consulta de solo lectura muestra los intentos de la misma cuenta e
+instrumento en el minuto anterior y posterior al pago de referencia, con
+hora de Santiago, estado, contador de la ventana y presencia de alerta.
+Para una serie aislada de cuatro intentos en diez segundos, el cuarto debe
+quedar `BLOCKED`, con contador 4 y alerta registrada.
+
 ## DynamoDB y dashboard
 
 El 22 de noviembre, el navegador obtuvo HTTP 200 en el resumen autenticado

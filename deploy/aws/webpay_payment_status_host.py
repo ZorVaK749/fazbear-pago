@@ -1,4 +1,4 @@
-"""Read one sandbox Webpay attempt without confirming or modifying it."""
+"""Read sandbox Webpay and simulated antifraud evidence without modifying it."""
 
 from decimal import Decimal
 import json
@@ -52,11 +52,15 @@ def read_provider(row, configuration):
         return {"consulta": "Transbank no disponible"}
 
 
-def inspect_payment(payment_id):
+def payment_env():
     pago = Host().inspect(CONTAINER)
     if not pago["State"]["Running"] or not pago["Config"]["Image"].startswith(IMAGE.split("@", 1)[0] + "@sha256:"):
         raise RolloutError("Se requiere el contenedor oficial de Pago en ejecución.")
-    lines = pago["Config"]["Env"]
+    return pago["Config"]["Env"]
+
+
+def inspect_payment(payment_id):
+    lines = payment_env()
     row = read_row(lines, f"""
         SELECT json_build_object('operacion', p.operation_id, 'estado', p.status, 'importe', p.amount,
             'retorno_registrado', w.browser_return_received, 'token', w.provider_token,
@@ -69,6 +73,36 @@ def inspect_payment(payment_id):
     summary = {key: row[key] for key in ("operacion", "estado", "importe", "retorno_registrado")}
     summary["transbank"] = read_provider(row, env_values(lines))
     print(json.dumps(summary), flush=True)
+
+
+def inspect_antifraud(payment_id):
+    result = read_row(payment_env(), f"""
+        BEGIN READ ONLY;
+        WITH referencia AS (
+            SELECT id, tenant_id, owner_id, instrument_id, created_at
+            FROM payment WHERE id='{payment_id}'::uuid AND simulation
+        ), intentos AS (
+            SELECT to_char(a.attempted_at AT TIME ZONE 'America/Santiago',
+                           'YYYY-MM-DD HH24:MI:SS.MS') AS hora_santiago,
+                   round(extract(epoch FROM a.attempted_at - r.created_at)::numeric, 3) AS segundos_desde_referencia,
+                   p.status AS estado, p.id=r.id AS referencia, d.attempts_in_window AS intentos_en_ventana,
+                   d.blocked AS bloqueado, f.attempt_id IS NOT NULL AS alerta_registrada
+            FROM referencia r
+            JOIN payment p USING (tenant_id, owner_id, instrument_id)
+            JOIN payment_attempt a ON a.payment_id=p.id
+            JOIN antifraud_decision d ON d.attempt_id=a.id
+            LEFT JOIN fraud_alert f ON f.attempt_id=a.id
+            WHERE p.simulation AND a.attempted_at BETWEEN r.created_at - interval '1 minute'
+                                                     AND r.created_at + interval '1 minute'
+            ORDER BY (p.id=r.id) DESC, a.attempted_at DESC LIMIT 16
+        )
+        SELECT json_build_object('intentos', json_agg(intentos ORDER BY segundos_desde_referencia))
+        FROM intentos HAVING count(*) > 0;
+        ROLLBACK;
+        """)
+    if result is None:
+        raise RolloutError("No se encontró evidencia antifraude para ese pago simulado.")
+    print(json.dumps(result), flush=True)
 
 
 def inspect_order(operation_id, payment_id):
@@ -87,6 +121,8 @@ def main(args):
         mode, *ids = args
         if mode == "pago" and len(ids) == 1:
             inspect_payment(UUID(ids[0]))
+        elif mode == "antifraude" and len(ids) == 1:
+            inspect_antifraud(UUID(ids[0]))
         elif mode == "orden" and len(ids) == 2:
             inspect_order(UUID(ids[0]), UUID(ids[1]))
         else:

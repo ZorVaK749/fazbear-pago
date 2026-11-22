@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Diagnóstico de solo lectura para un intento de Webpay y su cotización."""
+"""Diagnóstico de solo lectura para Webpay y el antifraude simulado."""
 
 import argparse
 import json
@@ -21,11 +21,16 @@ def inspect(instance, mode, *ids):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--payment-id", type=UUID, required=True)
+    parser.add_argument("--antifraude", action="store_true",
+                        help="Consultar los intentos simulados cercanos al pago de referencia.")
     args = parser.parse_args()
     try:
         if aws("sts", "get-caller-identity")["Account"] != ACCOUNT:
             raise RolloutError("La sesión debe corresponder al laboratorio de EV3.")
         payment_id = str(args.payment_id)
+        if args.antifraude:
+            inspect(INSTANCE, "antifraude", payment_id)
+            return 0
         result = json.loads(inspect(INSTANCE, "pago", payment_id))
         inspect(SERVICES["orden"][0], "orden", str(UUID(result["operacion"])), payment_id)
     except (RolloutError, KeyError, ValueError) as error:
