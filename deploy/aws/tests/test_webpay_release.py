@@ -14,6 +14,26 @@ IMAGE = host.PACKAGE + "@sha256:" + "a" * 64
 
 
 class WebpayReleaseTest(unittest.TestCase):
+    def test_ev3_return_requires_working_frontend_before_requesting_ssm(self):
+        with patch.object(cli, "aws", return_value={"Account": cli.ACCOUNT}), \
+                patch.object(cli, "private_ip", return_value="172.31.11.205"), \
+                patch.object(cli, "verify_named_stage", side_effect=cli.RolloutError("Frontend pendiente")), \
+                patch.object(cli, "run_ssm") as remote:
+            with self.assertRaisesRegex(cli.RolloutError, "Frontend pendiente"):
+                cli.execute("apply", IMAGE, 6, "ev3")
+        remote.assert_not_called()
+
+    def test_ev3_return_candidate_overrides_only_the_return_url_from_v6(self):
+        release = host.WebpayRelease("172.31.11.205", IMAGE, 6, "ev3")
+        old = {"Name": "/" + host.CONTAINER, "Config": {"Image": host.V6_IMAGE}}
+        with patch.object(host.Backend, "preflight", return_value=(old, {})), \
+                patch.object(release, "mode", return_value=host.ENABLED_MODE), \
+                patch.object(release, "rollback_database_config"), \
+                patch.object(release, "candidate_config", return_value={"new": True}) as candidate:
+            self.assertEqual(release.preflight(), (old, {"new": True}))
+        candidate.assert_called_once_with(old, {"WEBPAY_RETURN_URL": host.RETURN_URL_EV3},
+                                          image=IMAGE, replace_keys={"WEBPAY_RETURN_URL"})
+
     def test_apply_uses_the_live_payment_instance_and_checks_target_health(self):
         with patch.object(cli, "aws", return_value={"Account": cli.ACCOUNT}), \
                 patch.object(cli, "private_ip", return_value="172.31.11.205"), \

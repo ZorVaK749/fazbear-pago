@@ -5,12 +5,26 @@ import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.client.MockRestServiceServer;
 import org.springframework.web.client.RestClient;
+import java.net.URI;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatNoException;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.*;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withSuccess;
 
 class WebpayClientTest {
+    @Test
+    void acceptsBothApprovedCheckoutPathsAndRejectsOtherCallbackPaths() {
+        for (String path : new String[]{"/checkout/webpay", "/ev3/checkout/webpay"}) {
+            assertThatNoException().isThrownBy(() -> new WebpayClient("597055555532", "test-only",
+                    URI.create("https://shop.example.test" + path)));
+        }
+        assertThatThrownBy(() -> new WebpayClient("597055555532", "test-only",
+                URI.create("https://shop.example.test/ev3/checkout")))
+                .isInstanceOf(IllegalStateException.class);
+    }
+
     @Test
     void roundTripsOfficialRestFieldsAndIgnoresCardDetails() {
         var builder = RestClient.builder().baseUrl(WebpayClient.HOST);

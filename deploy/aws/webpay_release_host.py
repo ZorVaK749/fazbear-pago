@@ -9,28 +9,34 @@ import sys
 import uuid
 
 from clp_backends_host import Backend, MODES
-from webpay_host import CONTAINER, ENABLED_MODE, IMAGE, RolloutError, postgres_env, run, write_private
+from webpay_host import CONTAINER, ENABLED_MODE, IMAGE, RETURN_URL, RolloutError, env_values, postgres_env, run, write_private
 
 PACKAGE = IMAGE.split("@", 1)[0]
 V5_IMAGE = PACKAGE + "@sha256:f1c7dc048ab725b16e585d49d0442d7850a2af4625c11e97740c949734ebf608"
+V6_IMAGE = PACKAGE + "@sha256:55b7339291e1f8453d19ab75623978dcf42a342517a0236671564f20665cee0d"
+RETURN_URL_EV3 = RETURN_URL.removesuffix("/checkout/webpay") + "/ev3/checkout/webpay"
 BACKUP_TABLES = ("fixture_operation", "payment", "webpay_transaction", "idempotency_record", "flyway_schema_history")
 
 
 class WebpayRelease(Backend):
-    def __init__(self, address, image, migration=5):
+    def __init__(self, address, image, migration=5, return_stage="keep"):
         super().__init__("pago", address, address, (8087, "/health", image))
         self.migration = migration
         self.state_dir = Path("/var/lib/pedidos360-webpay-release")
         self.journal = self.state_dir / "current.json"
+        self.return_url = RETURN_URL_EV3 if return_stage == "ev3" else None
 
     def preflight(self):
         old, config = super().preflight()
-        if (old["Name"] != "/" + CONTAINER or old["Config"]["Image"] not in {IMAGE, V5_IMAGE, self.image}
+        if (old["Name"] != "/" + CONTAINER or old["Config"]["Image"] not in {IMAGE, V5_IMAGE, V6_IMAGE, self.image}
                 or self.mode() != ENABLED_MODE):
             raise RolloutError("El contenedor o la modalidad de Pago no coincide con el despliegue Webpay esperado.")
         if old["Config"]["Image"] == IMAGE:
             self.check_container(old)
         self.rollback_database_config(old)
+        if self.return_url:
+            config = self.candidate_config(old, {"WEBPAY_RETURN_URL": self.return_url},
+                                           image=self.image, replace_keys={"WEBPAY_RETURN_URL"})
         return old, config
 
     def apply(self):
@@ -67,6 +73,8 @@ class WebpayRelease(Backend):
         current = self.inspect(expected)
         if current["Config"]["Image"] != self.image:
             return
+        if self.return_url and env_values(current["Config"]["Env"]).get("WEBPAY_RETURN_URL") != self.return_url:
+            raise RolloutError("El retorno Webpay del contenedor no corresponde al stage ev3.")
         env = postgres_env(current["Config"]["Env"])
         result = run(["psql", "-X", "-w", "-qAt", "-v", "ON_ERROR_STOP=1", "-c",
                       f"SELECT EXISTS (SELECT 1 FROM flyway_schema_history WHERE version='{self.migration}' AND success);"],
@@ -79,10 +87,11 @@ class WebpayRelease(Backend):
 def main(args):
     os.umask(0o077)
     try:
-        mode, address, image, migration = args
-        if migration not in {"5", "6"}:
-            raise RolloutError("Migración de Pago no admitida.")
-        host = WebpayRelease(address, image, int(migration))
+        mode, address, image, migration, *options = args
+        return_stage = options[0] if options else "keep"
+        if migration not in {"5", "6"} or return_stage not in {"keep", "ev3"} or len(options) > 1:
+            raise RolloutError("Migración o stage de retorno de Pago no admitido.")
+        host = WebpayRelease(address, image, int(migration), return_stage)
         if mode == "status":
             host.status()
         elif mode == "dry-run":

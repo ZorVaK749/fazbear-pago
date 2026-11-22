@@ -81,18 +81,18 @@ def fetch(path):
         raise RolloutError("El frontend público no respondió con su aplicación Angular.") from None
 
 
-def verify_checkout():
-    index = fetch("/checkout")
+def verify_checkout(prefix=""):
+    index = fetch(prefix + "/checkout")
     main = re.search(r'src="(main-[A-Za-z0-9_-]+\.js)"', index)
     if not main:
         raise RolloutError("El frontend no entregó el archivo principal de Angular.")
-    entry = fetch("/" + main.group(1))
+    entry = fetch(prefix + "/" + main.group(1))
     chunk = re.search(r"""import\(['"`]\./(chunk-[A-Za-z0-9_-]+\.js)['"`]\)\.then\([^)]*?\.CheckoutComponent\)""", entry)
-    if not chunk or "btn-webpay" not in fetch("/" + chunk.group(1)):
+    if not chunk or "btn-webpay" not in fetch(prefix + "/" + chunk.group(1)):
         raise RolloutError("El frontend público todavía no sirve el checkout con el botón Webpay.")
 
 
-def execute(mode, image):
+def execute(mode, image, prefix=""):
     if aws("sts", "get-caller-identity").get("Account") != ACCOUNT:
         raise RolloutError(f"La sesión AWS debe corresponder a la cuenta {ACCOUNT}.")
     cluster, service = find_service()
@@ -114,7 +114,7 @@ def execute(mode, image):
         print(f"Revisión registrada: {new}", flush=True)
         aws("ecs", "update-service", "--cluster", cluster, "--service", service_name, "--task-definition", new)
     wait_stable(cluster, service_name, new)
-    verify_checkout()
+    verify_checkout(prefix)
     print("Frontend Fargate estable. El checkout público sirve el botón Webpay.")
 
 
@@ -124,16 +124,18 @@ def main():
     for mode in ("dry-run", "apply", "verify"):
         modes.add_argument("--" + mode, dest="mode", action="store_const", const=mode)
     parser.add_argument("--image")
+    parser.add_argument("--stage", choices=("ev3",))
     args = parser.parse_args()
     if (args.image is None and args.mode != "verify") or (
             args.image is not None and not IMAGE_DIGEST.fullmatch(args.image)):
         parser.error("--image requiere una referencia al paquete Angular por digest GHCR")
     try:
+        prefix = "/" + args.stage if args.stage else ""
         if args.mode == "verify" and args.image is None:
-            verify_checkout()
+            verify_checkout(prefix)
             print("El checkout público sirve el botón Webpay.")
         else:
-            execute(args.mode, args.image)
+            execute(args.mode, args.image, prefix)
     except (RolloutError, KeyError, IndexError, TypeError, ValueError) as error:
         message = str(error) if isinstance(error, RolloutError) else "ECS devolvió una respuesta inesperada."
         print(f"ERROR: {message}", file=sys.stderr)

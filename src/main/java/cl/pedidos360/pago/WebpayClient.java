@@ -29,7 +29,8 @@ class WebpayClient {
         if (!commerceCode.matches("[0-9]{12}") || key.isBlank()
                 || !"https".equals(returnUrl.getScheme()) || returnUrl.getHost() == null
                 || returnUrl.getUserInfo() != null || returnUrl.getQuery() != null || returnUrl.getFragment() != null
-                || !"/checkout/webpay".equals(returnUrl.getPath())) {
+                || !("/checkout/webpay".equals(returnUrl.getPath())
+                     || "/ev3/checkout/webpay".equals(returnUrl.getPath()))) {
             throw new IllegalStateException("WEBPAY_INTEGRATION_CONFIGURATION_REQUIRED");
         }
         this.returnUrl = returnUrl.toString();

@@ -81,6 +81,16 @@ class FrontendRolloutTests(unittest.TestCase):
         self.assertEqual([call.args[0] for call in fetch.call_args_list],
                          ["/checkout", "/main-RPXEOIZS.js", "/chunk-DMbAa7AA.js"])
 
+    def test_stage_prefix_is_used_for_index_and_javascript(self):
+        with patch.object(frontend, "fetch", side_effect=[
+            '<script src="main-ev3.js"></script>',
+            'import("./chunk-ev3.js").then(t=>t.CheckoutComponent)',
+            'const selector="btn-webpay";',
+        ]) as fetch:
+            frontend.verify_checkout("/ev3")
+        self.assertEqual([call.args[0] for call in fetch.call_args_list],
+                         ["/ev3/checkout", "/ev3/main-ev3.js", "/ev3/chunk-ev3.js"])
+
     def test_verify_waits_for_existing_revision_without_registering_or_updating(self):
         deploying = dict(SERVICE, deployments=[{}, {}])
         with patch.object(frontend, "aws", side_effect=[{"Account": frontend.ACCOUNT}, TASK]) as aws, \
