@@ -500,8 +500,9 @@ preflight del GET con `Authorization`.
 El resumen usa la API HTTP. La sección **Actividad en vivo** conserva
 su conexión WSS y tiene una verificación propia.
 
-La imagen pasó 137 pruebas de Angular. Falta aplicarla en Fargate y
-registrar los contadores antes y después de las acciones autenticadas.
+La imagen pasó 137 pruebas de Angular. Fargate quedó estable en la revisión
+`:12` y `/actividad` sirve el módulo con el resumen y los contadores nuevos.
+Queda registrar los valores antes y después de las acciones autenticadas.
 
 ```bash
 cd "$HOME/pedidos360-ops-pago" &&
