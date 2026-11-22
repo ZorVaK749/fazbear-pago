@@ -251,7 +251,7 @@ El stage `ev3` conserva las cuatro rutas JWT en `integrations/qamokas`.
 - [x] Confirmar HTTP 200 en `/health` y comprobar el digest del contenedor.
 - [x] Confirmar el Target Group healthy en dos observaciones separadas por al menos 30 s.
 - [x] Confirmar con sesión iniciada que el checkout muestra saldo, movimientos y recompensas. Se observó saldo de 0 Fz, movimientos vacíos e Insignia Faz VIP por 100 Fz. El canje devolvió 422 por saldo insuficiente.
-- [ ] Confirmar un movimiento `AWARD` de un pago simulado aprobado en CLP.
+- [x] Confirmar un movimiento `AWARD` de un pago simulado aprobado en CLP. El 22 de noviembre el checkout pasó de 0 a 675 Fz disponibles y mostró un abono de 675 Fz por la compra simulada de CLP 13.500.
 
 Para la validación de solo lectura, abrir el checkout y pulsar
 **Actualizar FazCoins**. Verificar HTTP 200 en saldo, movimientos y
@@ -268,6 +268,23 @@ Configurar `FIDELIZACION_DB_URL`, `FIDELIZACION_DB_USER`,
 y la clave compartida `INTERNAL_SERVICE_KEY` mediante el entorno privado
 de la EC2. El puerto 8089 del host apunta al 8080 del contenedor.
 [CI de Fidelización](https://github.com/ZorVaK749/fazbear-fidelizacion/actions/runs/44362087350)
+
+### Historial de FazCoins en el frontend
+
+El checkout muestra el concepto, el importe en Fz y la hora de Santiago.
+Los códigos del servicio y los identificadores internos quedan fuera de la
+vista. Las 135 pruebas de Angular pasaron y el manifiesto se verificó en
+GHCR. Tras desplegar, abrir el checkout con la misma cuenta y comprobar el
+abono existente **Abono por compra simulada · +675 Fz**.
+
+```bash
+cd "$HOME/pedidos360-ops-pago" &&
+git pull --ff-only origin ev3/webpay-integracion &&
+python3 deploy/aws/frontend_image.py --apply --image \
+  ghcr.io/zorvak749/fazbears-frontend@sha256:5f2b43acfe51345b3974a1914f4be77857ccdd7ab5ca5328b05d44fa5de1937e
+```
+
+[CI y publicación del historial](https://github.com/ZorVaK749/fazbears-frontend/actions/runs/45073964424)
 
 ### EC2 de Fidelización en AWS Academy
 
