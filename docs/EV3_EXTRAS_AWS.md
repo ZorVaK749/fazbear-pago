@@ -563,7 +563,13 @@ intento volvió a `/ev3/checkout/webpay` con el mensaje de cierre sin pago
 confirmado. El artículo de la compra aprobada permaneció en el carrito.
 
 - [x] Confirmar la anulación desde Transbank bajo `/ev3/checkout/webpay` y que esa prueba no cree un pedido adicional.
+- [x] Desplegar Carrito por digest y Fargate `:16`, verificar ambos servicios y comprobar el retorno sintético por `/ev3/`.
 - [ ] Comprobar tras el despliegue que el contador y el carrito persistido se vacían al confirmar un pago con Webpay.
+
+Carrito reutilizó el montaje H2 y su Target Group quedó healthy en dos
+observaciones separadas por al menos 30 segundos. Fargate quedó estable en
+`:16`. El JavaScript público de `/ev3/checkout` contiene la limpieza
+condicional y el Gateway devolvió HTTP 303 para el POST de prueba.
 
 El frontend guarda en la pestaña la referencia del carrito al iniciar
 Webpay. Después de confirmar el pedido, Carrito elimina los artículos
