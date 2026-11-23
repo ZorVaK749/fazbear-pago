@@ -128,7 +128,7 @@ python3 deploy/aws/frontend_image.py --apply --image \
 - [x] Consultar el intento de 25.980 CLP en Pago, Transbank y Orden.
 - [x] Verificar Pago con Flyway V6 y el frontend en Fargate `:7`.
 - [x] Confirmar el pedido de integración #65 por 11.990 CLP y comprobar la vista **Pago efectuado**.
-- [ ] Confirmar en AWS el cierre del intento vencido y la vuelta al checkout.
+- [x] Confirmar en AWS el cierre del intento vencido y la vuelta al checkout. La consulta autenticada del intento de CLP 25.980 devolvió HTTP 200 y `EXPIRED`.
 - [ ] Validar en AWS la nueva verificación automática al volver de Transbank.
 
 Para investigar ese intento desde CloudShell, usar una consulta de solo
@@ -565,7 +565,7 @@ CloudShell encontró un intento `PENDING`, las rutas explícitas completas y
 la ruta y el stage `$default` presentes. Se debe cotejar el intento antiguo
 de CLP 25.980 con Pago, Transbank y Orden antes de decidir su cierre.
 
-La nueva consulta confirmó que el intento de CLP 25.980 conserva `PENDING`,
+La consulta previa a la recuperación confirmó que el intento de CLP 25.980 conservaba `PENDING`,
 sin retorno registrado, con Transbank `INITIALIZED` y con Orden sin pedido
 asociado. Para reconciliarlo, iniciar sesión con la cuenta original y abrir
 `/ev3/checkout/webpay?recuperar=<UUID_DEL_PAGO>`. Pulsar **Verificar el mismo
@@ -573,6 +573,10 @@ pago**. El frontend usa la ruta de estado protegida por JWT y Pago aplica
 su regla de vencimiento al intento existente. Después del mensaje de
 vencimiento, volver a consultar
 `webpay_payment_status.py --pendientes-webpay`.
+
+La verificación desde `/ev3/checkout/webpay` devolvió HTTP 200 y `EXPIRED`
+para el intento de CLP 25.980. Queda volver a consultar el total de Webpay
+pendientes antes del retiro de `$default`.
 
 ```bash
 python3 deploy/aws/frontend_image.py --apply --stage ev3 --image \
