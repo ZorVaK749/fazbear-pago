@@ -556,6 +556,45 @@ python3 deploy/aws/webpay_release.py --apply --migration 6 --return-stage ev3 --
 · [CI de Pago](https://github.com/ZorVaK749/fazbear-pago/actions/runs/45081571579)
 · [CI de scripts AWS](https://github.com/ZorVaK749/fazbear-pago/actions/runs/45085224333)
 
+### Sincronización del carrito tras Webpay
+
+El navegador mostró el pedido `#131` por CLP 12.990 y la anulación de otro
+intento volvió a `/ev3/checkout/webpay` con el mensaje de cierre sin pago
+confirmado. El artículo de la compra aprobada permaneció en el carrito.
+
+- [x] Confirmar la anulación desde Transbank bajo `/ev3/checkout/webpay` y que esa prueba no cree un pedido adicional.
+- [ ] Comprobar tras el despliegue que el contador y el carrito persistido se vacían al confirmar un pago con Webpay.
+
+El frontend guarda en la pestaña la referencia del carrito al iniciar
+Webpay. Después de confirmar el pedido, Carrito elimina los artículos
+solo si la revisión aún coincide. La comprobación y la eliminación usan
+la misma transacción. La ruta aprovecha el `DELETE` por ítem protegido
+por JWT que ya existe en API Gateway. La actualización reaprovecha el
+montaje H2 actual y las pruebas cubren el conflicto por un carrito editado.
+
+```bash
+cd "$HOME/pedidos360-ops-pago" &&
+git pull --ff-only origin ev3/webpay-integracion &&
+python3 deploy/aws/clp_backends.py --apply --service carrito --image \
+  ghcr.io/zorvak749/fazbear-carrito@sha256:149b0394ccb03a7db9565bd760ef8406041ae398dd2cb30feb57b0bf1322cc66 &&
+python3 deploy/aws/frontend_image.py --apply --stage ev3 --image \
+  ghcr.io/zorvak749/fazbears-frontend@sha256:b896f1d20460a74b9cf2ab7c2cc2514fa904fe8a1f3bab76464a792ff397b024 &&
+python3 deploy/aws/frontend_gateway.py --verify
+```
+
+Tras el corte, iniciar una compra nueva en `/ev3/checkout`. Al ver
+**Pago efectuado**, pulsar **Volver al checkout** y recargar la página.
+El carrito debe seguir vacío. Si se editó en otra pestaña durante el pago,
+el recibo pide revisar su contenido y los artículos quedan guardados.
+
+Para volver a la versión anterior tras una activación completa, aplicar
+primero la imagen del frontend `sha256:b83a0c7bd4db18ef65de682203e0947c775b5218f4734329c7d9d424d3561c59`
+y después la de Carrito `sha256:0972d9b0082649b842d46fadab78c960b61d3699d7009bb6ea9a927ae3b04270`
+con los mismos comandos. Esto cambia las imágenes y conserva el montaje H2.
+
+[CI de Carrito](https://github.com/ZorVaK749/fazbear-carrito/actions/runs/45089516706)
+· [CI del frontend](https://github.com/ZorVaK749/fazbears-frontend/actions/runs/45089454610)
+
 ## Validación de Kafka desde Mi actividad
 
 El resumen autenticado de **Mi actividad** consulta

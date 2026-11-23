@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Actualiza los servicios EC2 restantes del cambio a CLP por digest."""
+"""Actualiza Carrito, Orden o Notificaciones en EC2 por digest."""
 
 import argparse
 from ipaddress import IPv4Address
@@ -7,21 +7,27 @@ import sys
 
 from clp_inventory import SERVICES
 from clp_productos import python_request
-from clp_backends_host import MODES, RELEASE
+from clp_backends_host import MODES, RELEASE, release_for
 from webpay import ACCOUNT, RolloutError, aws, private_ip, resolve_target, run_ssm, target_state, wait_for_target
 
 MODULES = ("webpay_host", "clp_inventory_host", "clp_backends_host")
 
 
-def send(name, mode, address, catalog):
+def send(name, mode, address, catalog, image=None):
     instance = SERVICES[name][0]
     arguments = (name, mode, str(IPv4Address(address)), str(IPv4Address(catalog)))
+    if image:
+        arguments += (image,)
     request = python_request(instance, f"Pedidos360 CLP {name} {mode}", MODULES, arguments, 200)
     run_ssm(request, instance, timeout=270,
             failure=f"Operación incompleta en {name}. Consulte --status --service {name} y el Command ID.")
 
 
-def execute(mode, selected=None):
+def execute(mode, selected=None, image=None):
+    if image is not None:
+        if selected is None:
+            raise RolloutError("--image requiere --service.")
+        release_for(selected, image)
     if aws("sts", "get-caller-identity")["Account"] != ACCOUNT:
         raise RolloutError(f"La sesión AWS debe corresponder a la cuenta {ACCOUNT}.")
     product_instance, _, product_port = SERVICES["productos"]
@@ -36,7 +42,7 @@ def execute(mode, selected=None):
         instance, _, port = SERVICES[name]
         address = private_ip(instance)
         if mode == "status":
-            send(name, mode, address, catalog)
+            send(name, mode, address, catalog, image)
             continue
         arn, target, interval = resolve_target(None, instance=instance, port=port)
         initial = target_state(arn, target, True, port=port)
@@ -44,11 +50,11 @@ def execute(mode, selected=None):
         if mode in {"dry-run", "apply"}:
             if initial != "healthy":
                 raise RolloutError(f"El Target Group de {name} debe estar healthy antes del corte.")
-            send(name, "dry-run", address, catalog)
+            send(name, "dry-run", address, catalog, image)
         targets.append((name, address, arn, target, interval, port))
     if mode in {"apply", "verify", "recover"}:
         for name, address, arn, target, interval, port in targets:
-            send(name, mode, address, catalog)
+            send(name, mode, address, catalog, image)
             wait_for_target(arn, target, interval, port=port)
 
 
@@ -58,11 +64,12 @@ def main():
     for mode in MODES:
         flags.add_argument(f"--{mode}", dest="mode", action="store_const", const=mode)
     parser.add_argument("--service", choices=RELEASE)
+    parser.add_argument("--image", help="Referencia GHCR por digest para el servicio indicado")
     args = parser.parse_args()
     if args.mode == "recover" and not args.service:
         parser.error("--recover requiere --service")
     try:
-        execute(args.mode, args.service)
+        execute(args.mode, args.service, args.image)
     except RolloutError as error:
         print(f"ERROR: {error}", file=sys.stderr)
         return 1

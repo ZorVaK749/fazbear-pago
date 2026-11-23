@@ -27,6 +27,16 @@ HEALTHY_HTTP = {200, 401, 403}
 BEFORE_ACTIVATION = {"preparing", "prepared"}
 
 
+def release_for(name, image=None):
+    port, path, default_image = RELEASE[name]
+    if image is None:
+        return port, path, default_image
+    package = default_image.split("@", 1)[0]
+    if not re.fullmatch(re.escape(package) + r"@sha256:[0-9a-f]{64}", image):
+        raise RolloutError(f"La imagen de {name} debe usar un digest SHA256 del paquete {package}.")
+    return port, path, image
+
+
 def http_status(address, port, path):
     opener = build_opener(ProxyHandler({}), NoRedirect())
     try:
@@ -189,9 +199,11 @@ class Backend(Host):
 
 def main(args):
     os.umask(0o077)
-    name, mode, address, catalog = args
     try:
-        host = Backend(name, address, catalog)
+        name, mode, address, catalog, *images = args
+        if len(images) > 1:
+            raise RolloutError("Se admite una sola imagen por operación.")
+        host = Backend(name, address, catalog, release_for(name, images[0] if images else None))
         if mode == "status":
             host.status()
         elif mode == "dry-run":

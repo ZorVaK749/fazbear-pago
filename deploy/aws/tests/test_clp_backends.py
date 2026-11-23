@@ -9,6 +9,19 @@ import clp_backends_host as host
 
 
 class ClpBackendsTest(unittest.TestCase):
+    def test_explicit_image_is_bound_to_selected_service(self):
+        image = "ghcr.io/zorvak749/fazbear-carrito@sha256:" + "f" * 64
+        self.assertEqual(host.release_for("carrito", image), (8083, "/api/carrito/me", image))
+        with patch.object(cli, "aws") as aws:
+            with self.assertRaisesRegex(host.RolloutError, "--service"):
+                cli.execute("apply", image=image)
+            with self.assertRaisesRegex(host.RolloutError, "fazbear-orden"):
+                cli.execute("apply", "orden", image)
+        aws.assert_not_called()
+        with patch.object(cli, "run_ssm"), patch.object(cli, "python_request") as request:
+            cli.send("carrito", "verify", "172.31.7.210", "172.31.15.227", image)
+        self.assertEqual(request.call_args.args[3], ("carrito", "verify", "172.31.7.210", "172.31.15.227", image))
+
     def test_all_preflight_checks_finish_before_any_cut(self):
         with patch.object(cli, "aws", return_value={"Account": cli.ACCOUNT}), \
                 patch.object(cli, "private_ip", return_value="172.31.15.227"), \
