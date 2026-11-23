@@ -487,14 +487,16 @@ procedimiento prepara rutas explícitas y un deployment del stage `ev3`
 usando la integración existente de Fargate. El ingreso anterior permanece
 disponible durante la transición de Entra y Webpay.
 
-Fargate quedó estable en la revisión `:14`. CloudShell confirmó un
-deployment del stage `ev3` con rutas explícitas y se verificó
-públicamente el checkout y su módulo Webpay mediante el prefijo `/ev3/`.
-La revisión `:14` devuelve HTTP 405 al POST de retorno. Transbank envía el
-formulario por POST al anular la compra en integración. La corrección de
-Angular y Nginx mantiene el stage al redirigir al checkout y pasa los
-campos del formulario al navegador en un fragmento temporal. El retorno
-GET de una compra aprobada sigue el flujo existente. [Documentación de Transbank](https://github.com/TransbankDevelopers/transbank-developers-docs/blob/master/documentacion/webpay-plus/README.md#resumen-de-flujos)
+Fargate quedó estable en la revisión `:15`. CloudShell confirmó las rutas
+explícitas del stage `ev3`, el checkout público y la redirección HTTP 303
+del POST de retorno. El verificador también comprobó el checkout y el
+POST sintético desde fuera de CloudShell.
+
+Transbank usa POST al anular la compra en integración. La corrección de
+Angular y Nginx mantiene el stage al redirigir al checkout y pasa los campos
+del formulario al navegador en un fragmento temporal. [Documentación de Transbank](https://github.com/TransbankDevelopers/transbank-developers-docs/blob/master/documentacion/webpay-plus/README.md#resumen-de-flujos)
+
+- [x] Desplegar Fargate `:15` y verificar el checkout y el POST de retorno sintético por `/ev3/`.
 
 1. Agregar `https://p5gsy16utd.execute-api.us-east-1.amazonaws.com/ev3/`
    a **Redirect URIs** de tipo **Single-page application** en el registro
@@ -542,7 +544,7 @@ python3 deploy/aws/webpay_release.py --apply --migration 6 --return-stage ev3 --
 
 [CI de Angular y Nginx](https://github.com/ZorVaK749/fazbears-frontend/actions/runs/45085027149)
 · [CI de Pago](https://github.com/ZorVaK749/fazbear-pago/actions/runs/45081571579)
-· [CI de scripts AWS](https://github.com/ZorVaK749/fazbear-pago/actions/runs/45081692779)
+· [CI de scripts AWS](https://github.com/ZorVaK749/fazbear-pago/actions/runs/45085224333)
 
 ## Validación de Kafka desde Mi actividad
 
