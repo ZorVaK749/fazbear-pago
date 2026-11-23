@@ -208,7 +208,7 @@ verificación de Webpay.
 - [x] Verificar 134 pruebas de Angular, la compilación y el manifiesto publicado en GHCR.
 - [x] Confirmar Fargate estable en la revisión `:9` y comprobar el botón Webpay en el checkout público.
 - [x] Comprobar HTTP 200 en `/perfil`, `/actividad`, `/pedidos` y `/checkout`, y HTTP 404 al solicitar el archivo Angular anterior `chunk-Y7KOawDr.js`.
-- [ ] Verificar con sesión iniciada `Mi actividad`, `Mi perfil`, `Configuración de cuenta` y el pedido `#65` en `Mis pedidos`.
+- [x] Verificar con sesión iniciada `Mi actividad`, `Mi perfil`, `Configuración de cuenta` y el pedido `#65` en `Mis pedidos`. Tras registrar `/ev3/` como URI SPA en Entra, se comprobó el regreso al catálogo. El usuario también verificó el inicio y el cierre de sesión desde una ventana privada.
 
 ```bash
 cd "$HOME/pedidos360-ops-pago" &&
@@ -626,6 +626,27 @@ python3 deploy/aws/frontend_gateway.py --restore-default
 [CI de Angular y Nginx](https://github.com/ZorVaK749/fazbears-frontend/actions/runs/45085027149)
 · [CI de Pago](https://github.com/ZorVaK749/fazbear-pago/actions/runs/45081571579)
 · [CI de scripts AWS](https://github.com/ZorVaK749/fazbear-pago/actions/runs/45085224333)
+
+### Comprobante guardado en Mis pedidos
+
+El frontend abre el comprobante de un pedido existente desde **Mis pedidos**.
+Usa el estado, la fecha de Santiago, el detalle en CLP y el medio de pago que
+ya entrega el historial de la cuenta. La imagen se publicó para `linux/amd64`.
+[CI de Angular y publicación](https://github.com/ZorVaK749/fazbears-frontend/actions/runs/45240098380)
+
+En CloudShell, actualizar el repositorio y desplegar la imagen por digest.
+
+```bash
+cd "$HOME/pedidos360-ops-pago" &&
+git pull --ff-only origin ev3/webpay-integracion &&
+python3 deploy/aws/frontend_image.py --apply --stage ev3 --image \
+  ghcr.io/zorvak749/fazbears-frontend@sha256:bd6d19f6a10d38695469d79a188b1edebbce1a56a790ca3f8f5c352f40cd467f &&
+python3 deploy/aws/frontend_gateway.py --verify
+```
+
+Con sesión iniciada, abrir **Mis pedidos** y pulsar **Ver comprobante** en
+un pedido existente. Comprobar el detalle, el total y el estado del pedido.
+La salida del despliegue registra la revisión y el digest que estaba activo.
 
 ### Sincronización del carrito tras Webpay
 
