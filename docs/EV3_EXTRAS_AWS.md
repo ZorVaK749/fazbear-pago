@@ -574,10 +574,6 @@ su regla de vencimiento al intento existente. Después del mensaje de
 vencimiento, volver a consultar
 `webpay_payment_status.py --pendientes-webpay`.
 
-La verificación desde `/ev3/checkout/webpay` devolvió HTTP 200 y `EXPIRED`
-para el intento de CLP 25.980. Queda volver a consultar el total de Webpay
-pendientes antes del retiro de `$default`.
-
 ```bash
 python3 deploy/aws/frontend_image.py --apply --stage ev3 --image \
   ghcr.io/zorvak749/fazbears-frontend@sha256:75037433d018705160a25608f9e3b1ae796f2340e49c35e06a83e9c0ea87f0e9 &&
@@ -587,6 +583,40 @@ python3 deploy/aws/frontend_gateway.py --verify
 [CI del frontend con recuperación del intento](https://github.com/ZorVaK749/fazbears-frontend/actions/runs/45106202659)
 
 - [x] Confirmar Fargate `:18` con el digest de recuperación y verificar que el módulo público de `/ev3/checkout/webpay` sirve **Verificar el mismo pago** desde el enlace de recuperación.
+
+La verificación desde `/ev3/checkout/webpay` devolvió HTTP 200 y `EXPIRED`
+para el intento de CLP 25.980. CloudShell volvió a consultar Pago y obtuvo
+`total_sin_estado_final: 0`.
+
+- [x] Confirmar que quedan cero intentos Webpay sin estado final en Pago.
+
+### Retiro de `$default` del frontend
+
+En una ventana privada, abrir `/ev3/`, iniciar sesión y salir desde el menú
+de perfil. Confirmar que el regreso de Entra conserva `/ev3/` y que
+**Mis pedidos** abre con sesión iniciada. Después, aplicar el retiro desde
+CloudShell.
+
+```bash
+cd "$HOME/pedidos360-ops-pago" &&
+git pull --ff-only origin ev3/webpay-integracion &&
+python3 deploy/aws/frontend_gateway.py --retire-default
+```
+
+El comando verifica las rutas públicas de `ev3`, vuelve a consultar el total
+de pagos y conserva la configuración de la ruta y el stage anteriores en
+`~/pedidos360-frontend-default.json`. Después retira ambos recursos del
+Gateway de Angular y comprueba el checkout de `/ev3/`, el retorno POST
+de Webpay y HTTP 404 en la raíz y en una ruta desconocida bajo `/ev3/`.
+[Enrutamiento de HTTP API en AWS](https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api-develop-routes.html#http-api-routing)
+
+Para volver a habilitar el acceso anterior, ejecutar el comando de
+restauración desde el mismo directorio. El comando comprueba nuevamente
+el acceso público.
+
+```bash
+python3 deploy/aws/frontend_gateway.py --restore-default
+```
 
 [CI de Angular y Nginx](https://github.com/ZorVaK749/fazbears-frontend/actions/runs/45085027149)
 · [CI de Pago](https://github.com/ZorVaK749/fazbear-pago/actions/runs/45081571579)

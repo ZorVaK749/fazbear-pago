@@ -23,7 +23,10 @@ INSTANCE = "i-0241836a7e45a2e3f"
 PORT = 8087
 HOST_SCRIPT = Path(__file__).with_name("webpay_host.py")
 TARGET_ARN = re.compile(r"arn:aws:elasticloadbalancing:us-east-1:[0-9]{12}:targetgroup/[A-Za-z0-9-]+/[a-f0-9]+")
-EMPTY_AWS_OUTPUT = {("ec2", "modify-instance-attribute"), ("ec2", "create-tags"), ("elbv2", "register-targets")}
+EMPTY_AWS_OUTPUT = {
+    ("ec2", "modify-instance-attribute"), ("ec2", "create-tags"), ("elbv2", "register-targets"),
+    ("apigatewayv2", "delete-route"), ("apigatewayv2", "delete-stage"),
+}
 
 
 @contextmanager

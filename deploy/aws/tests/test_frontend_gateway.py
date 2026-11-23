@@ -1,7 +1,9 @@
 from contextlib import redirect_stdout
 import io
+import json
 from pathlib import Path
 import sys
+from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 from urllib.error import HTTPError
@@ -12,6 +14,9 @@ import frontend_gateway as gateway
 
 class FrontendGatewayTests(unittest.TestCase):
     target = "integrations/abc123"
+    default_route = {"RouteKey": "$default", "AuthorizationType": "NONE", "Target": target, "RouteId": "legacy1"}
+    default_stage = {"StageName": "$default", "AutoDeploy": False, "DeploymentId": "legacy-deployment",
+                     "StageVariables": {"example": "synthetic"}}
 
     def test_prepare_adds_routes_and_named_stage_without_removing_current_gateway(self):
         default = {"RouteKey": "$default", "AuthorizationType": "NONE", "Target": self.target}
@@ -70,3 +75,58 @@ class FrontendGatewayTests(unittest.TestCase):
             with self.assertRaisesRegex(gateway.RolloutError, "despliegue ev3"):
                 gateway.execute("verify")
         fetch.assert_not_called()
+
+    def test_retirement_rejects_unfinished_payments_without_deleting(self):
+        stages = {"ev3": {"AutoDeploy": True}, "$default": self.default_stage}
+        with TemporaryDirectory() as directory, patch.object(gateway, "verify_named_stage"), \
+                patch.object(gateway, "inventory", return_value=({"$default": self.default_route}, stages, self.target)), \
+                patch.object(gateway, "inspect_payments", return_value='{"total_sin_estado_final": 1}'), \
+                patch.object(gateway, "aws") as aws:
+            backup = Path(directory) / "backup.json"
+            with self.assertRaisesRegex(gateway.RolloutError, "sin estado final"):
+                gateway.retire_default(backup)
+            self.assertFalse(backup.exists())
+        aws.assert_not_called()
+
+    def test_retirement_saves_the_route_and_stage_before_removing_only_default(self):
+        stages = {"ev3": {"AutoDeploy": True}, "$default": self.default_stage}
+        with TemporaryDirectory() as directory, patch.object(gateway, "verify_named_stage"), \
+                patch.object(gateway, "inventory", return_value=({"$default": self.default_route}, stages, self.target)), \
+                patch.object(gateway, "inspect_payments", return_value='{"total_sin_estado_final": 0}'), \
+                patch.object(gateway, "aws") as aws, patch.object(gateway, "wait_for_stage") as verify, \
+                redirect_stdout(io.StringIO()):
+            backup_path = Path(directory) / "backup.json"
+
+            def check_backup(*args):
+                snapshot = json.loads(backup_path.read_text(encoding="utf-8"))
+                self.assertEqual(snapshot["stage"], self.default_stage)
+                self.assertEqual(snapshot["route"], self.default_route)
+
+            aws.side_effect = check_backup
+            gateway.execute("retire-default", backup_path)
+        self.assertEqual([call.args for call in aws.call_args_list], [
+            ("apigatewayv2", "delete-stage", "--api-id", gateway.API, "--stage-name", "$default"),
+            ("apigatewayv2", "delete-route", "--api-id", gateway.API, "--route-id", "legacy1"),
+        ])
+        verify.assert_called_once_with(retired=True)
+
+    def test_restores_default_from_the_snapshot_using_the_previous_deployment(self):
+        with TemporaryDirectory() as directory, patch.object(gateway, "inventory", return_value=({}, {}, self.target)), \
+                patch.object(gateway, "aws") as aws, patch.object(gateway, "wait_for_stage"), \
+                redirect_stdout(io.StringIO()):
+            backup_path = Path(directory) / "backup.json"
+            backup_path.write_text(json.dumps({"account": gateway.ACCOUNT, "api": gateway.API, "target": self.target,
+                                               "route": self.default_route, "stage": self.default_stage}), encoding="utf-8")
+            gateway.execute("restore-default", backup_path)
+        self.assertEqual([call.args[1] for call in aws.call_args_list], ["create-route", "create-stage"])
+        self.assertEqual(aws.call_args.kwargs["input_json"], {"ApiId": gateway.API, **self.default_stage})
+
+    def test_retirement_checks_that_root_and_unknown_named_routes_return_404(self):
+        routes = {key: {"AuthorizationType": "NONE", "Target": self.target} for key in gateway.ROUTES}
+        stages = {"ev3": {"DeploymentId": "active"}}
+        with patch.object(gateway, "inventory", return_value=(routes, stages, self.target)), \
+                patch.object(gateway, "fetch", return_value="<app-root></app-root><base href='/ev3/'>"), \
+                patch.object(gateway, "verify_checkout"), patch.object(gateway, "verify_post_return"), \
+                patch.object(gateway, "expect_not_found") as unavailable, redirect_stdout(io.StringIO()):
+            gateway.verify_named_stage(retired=True)
+        self.assertEqual([call.args[0] for call in unavailable.call_args_list], ["/", "/ev3/_verificacion/ruta-inexistente"])
