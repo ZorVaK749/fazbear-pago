@@ -592,6 +592,11 @@ para el intento de CLP 25.980. CloudShell volvió a consultar Pago y obtuvo
 
 ### Retiro de `$default` del frontend
 
+- [x] Retirar la ruta y el stage `$default` de Angular. El 23 de noviembre se verificaron por HTTPS `/ev3/`, el checkout y el retorno POST de Webpay. La raíz y una ruta sin coincidencia devolvieron HTTP 404.
+
+CloudShell confirmó cero intentos pendientes antes del retiro y guardó
+el respaldo en `~/pedidos360-frontend-default.json`.
+
 En una ventana privada, abrir `/ev3/`, iniciar sesión y salir desde el menú
 de perfil. Confirmar que el regreso de Entra conserva `/ev3/` y que
 **Mis pedidos** abre con sesión iniciada. Después, aplicar el retiro desde
