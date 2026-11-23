@@ -565,6 +565,23 @@ CloudShell encontró un intento `PENDING`, las rutas explícitas completas y
 la ruta y el stage `$default` presentes. Se debe cotejar el intento antiguo
 de CLP 25.980 con Pago, Transbank y Orden antes de decidir su cierre.
 
+La nueva consulta confirmó que el intento de CLP 25.980 conserva `PENDING`,
+sin retorno registrado, con Transbank `INITIALIZED` y con Orden sin pedido
+asociado. Para reconciliarlo, iniciar sesión con la cuenta original y abrir
+`/ev3/checkout/webpay?recuperar=<UUID_DEL_PAGO>`. Pulsar **Verificar el mismo
+pago**. El frontend usa la ruta de estado protegida por JWT y Pago aplica
+su regla de vencimiento al intento existente. Después del mensaje de
+vencimiento, volver a consultar
+`webpay_payment_status.py --pendientes-webpay`.
+
+```bash
+python3 deploy/aws/frontend_image.py --apply --stage ev3 --image \
+  ghcr.io/zorvak749/fazbears-frontend@sha256:75037433d018705160a25608f9e3b1ae796f2340e49c35e06a83e9c0ea87f0e9 &&
+python3 deploy/aws/frontend_gateway.py --verify
+```
+
+[CI del frontend con recuperación del intento](https://github.com/ZorVaK749/fazbears-frontend/actions/runs/45106202659)
+
 [CI de Angular y Nginx](https://github.com/ZorVaK749/fazbears-frontend/actions/runs/45085027149)
 · [CI de Pago](https://github.com/ZorVaK749/fazbear-pago/actions/runs/45081571579)
 · [CI de scripts AWS](https://github.com/ZorVaK749/fazbear-pago/actions/runs/45085224333)
