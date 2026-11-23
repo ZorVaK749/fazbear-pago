@@ -578,6 +578,11 @@ el preflight de esa ruta permitió `DELETE` con `authorization` desde el
 frontend. FazCoins mostró los abonos previos del simulador, de acuerdo con
 la política de fidelización de esta entrega.
 
+Si Firefox perdió el registro de red, `cart_cleanup_status.py` revisa la
+ruta y busca el estado HTTP alrededor de la hora de compra en los registros
+de acceso de API Gateway. Es una consulta de solo lectura y su salida
+excluye rutas completas, revisiones e identificadores de clientes.
+
 El frontend guarda en la pestaña la referencia del carrito al iniciar
 Webpay. Después de confirmar el pedido, Carrito elimina los artículos
 solo si la revisión aún coincide. La comprobación y la eliminación usan
