@@ -582,6 +582,8 @@ python3 deploy/aws/frontend_gateway.py --verify
 
 [CI del frontend con recuperación del intento](https://github.com/ZorVaK749/fazbears-frontend/actions/runs/45106202659)
 
+- [x] Confirmar Fargate `:18` con el digest de recuperación y verificar que el módulo público de `/ev3/checkout/webpay` sirve **Verificar el mismo pago** desde el enlace de recuperación.
+
 [CI de Angular y Nginx](https://github.com/ZorVaK749/fazbears-frontend/actions/runs/45085027149)
 · [CI de Pago](https://github.com/ZorVaK749/fazbear-pago/actions/runs/45081571579)
 · [CI de scripts AWS](https://github.com/ZorVaK749/fazbear-pago/actions/runs/45085224333)
