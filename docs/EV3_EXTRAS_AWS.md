@@ -561,6 +561,10 @@ python3 deploy/aws/webpay_payment_status.py --pendientes-webpay &&
 python3 deploy/aws/frontend_gateway.py --dry-run
 ```
 
+CloudShell encontró un intento `PENDING`, las rutas explícitas completas y
+la ruta y el stage `$default` presentes. Se debe cotejar el intento antiguo
+de CLP 25.980 con Pago, Transbank y Orden antes de decidir su cierre.
+
 [CI de Angular y Nginx](https://github.com/ZorVaK749/fazbears-frontend/actions/runs/45085027149)
 · [CI de Pago](https://github.com/ZorVaK749/fazbear-pago/actions/runs/45081571579)
 · [CI de scripts AWS](https://github.com/ZorVaK749/fazbear-pago/actions/runs/45085224333)
