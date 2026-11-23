@@ -571,6 +571,13 @@ observaciones separadas por al menos 30 segundos. Fargate quedó estable en
 `:16`. El JavaScript público de `/ev3/checkout` contiene la limpieza
 condicional y el Gateway devolvió HTTP 303 para el POST de prueba.
 
+La compra `#132` mostró **Pago efectuado** en `/ev3/checkout/webpay` y el
+aviso de revisar el carrito. La limpieza autenticada queda pendiente de
+diagnóstico. El Gateway respondió 401 sin JWT en la ruta de limpieza y
+el preflight de esa ruta permitió `DELETE` con `authorization` desde el
+frontend. FazCoins mostró los abonos previos del simulador, de acuerdo con
+la política de fidelización de esta entrega.
+
 El frontend guarda en la pestaña la referencia del carrito al iniciar
 Webpay. Después de confirmar el pedido, Carrito elimina los artículos
 solo si la revisión aún coincide. La comprobación y la eliminación usan
