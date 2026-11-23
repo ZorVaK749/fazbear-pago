@@ -497,6 +497,12 @@ Angular y Nginx mantiene el stage al redirigir al checkout y pasa los campos
 del formulario al navegador en un fragmento temporal. [Documentación de Transbank](https://github.com/TransbankDevelopers/transbank-developers-docs/blob/master/documentacion/webpay-plus/README.md#resumen-de-flujos)
 
 - [x] Desplegar Fargate `:15` y verificar el checkout y el POST de retorno sintético por `/ev3/`.
+- [x] Configurar Pago con el retorno `/ev3/checkout/webpay`, comprobar Flyway V6 y verificar el Target Group.
+
+El corte de Pago activó el digest `sha256:2a4c4fca0fe4b6895e0308609fea76c545879fb271e030d83ad4e6a74136dd19`.
+El script generó el respaldo de PostgreSQL anterior al cambio y verificó su
+SHA256. Pago respondió HTTP 200 y el Target Group estuvo healthy en dos
+comprobaciones separadas por al menos 30 segundos.
 
 1. Agregar `https://p5gsy16utd.execute-api.us-east-1.amazonaws.com/ev3/`
    a **Redirect URIs** de tipo **Single-page application** en el registro
@@ -535,11 +541,15 @@ python3 deploy/aws/webpay_release.py --apply --migration 6 --return-stage ev3 --
   ghcr.io/zorvak749/fazbear-pago@sha256:2a4c4fca0fe4b6895e0308609fea76c545879fb271e030d83ad4e6a74136dd19
 ```
 
-5. Confirmar el retorno del navegador a `/ev3/checkout/webpay` y el
-   recibo **Pago efectuado**. Comprobar también una cancelación. Una vez
-   conciliadas las transacciones iniciadas con la URL anterior, revisar
-   el retiro de la ruta y del stage `$default` por separado y comprobar
-   el acceso público por `/ev3/`. Después del retiro, usar
+5. Hacer dos intentos de prueba desde el stage `ev3`. Primero aprobar
+   una compra y comprobar el retorno a `/ev3/checkout/webpay` y el recibo
+   **Pago efectuado**. Después iniciar otro intento y elegir **Anular
+   compra** en Transbank. Comprobar el retorno a la misma ruta, el mensaje
+   de cierre sin pago confirmado y que **Mis pedidos** muestre solo el
+   pedido aprobado en estas pruebas.
+6. Una vez conciliadas las transacciones iniciadas con la URL anterior,
+   revisar el retiro de la ruta y del stage `$default` por separado y
+   comprobar el acceso público por `/ev3/`. Después del retiro, usar
    `frontend_image.py --verify --stage ev3` en las verificaciones.
 
 [CI de Angular y Nginx](https://github.com/ZorVaK749/fazbears-frontend/actions/runs/45085027149)
