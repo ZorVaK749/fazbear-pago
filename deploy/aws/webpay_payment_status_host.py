@@ -105,6 +105,25 @@ def inspect_antifraud(payment_id):
     print(json.dumps(result), flush=True)
 
 
+def count_pending():
+    summary = read_row(payment_env(), """
+        BEGIN READ ONLY;
+        SELECT json_build_object(
+            'por_estado', COALESCE(json_object_agg(estado, cantidad), '{}'::json),
+            'total_sin_estado_final', COALESCE(sum(cantidad), 0)::bigint)
+        FROM (
+            SELECT p.status AS estado, count(*) AS cantidad
+            FROM payment p JOIN webpay_transaction w ON w.payment_id = p.id
+            WHERE NOT p.simulation AND p.status IN ('CREATING', 'CREATE_UNKNOWN', 'PENDING')
+            GROUP BY p.status
+        ) AS estados;
+        ROLLBACK;
+        """)
+    if not isinstance(summary, dict) or type(summary.get("total_sin_estado_final")) is not int:
+        raise RolloutError("No se pudo verificar el total de intentos Webpay pendientes.")
+    print(json.dumps(summary), flush=True)
+
+
 def inspect_order(operation_id, payment_id):
     orden = target("fazbear-orden", 8084)
     if not orden or not orden["Config"]["Image"].startswith("ghcr.io/zorvak749/fazbear-orden@sha256:"):
@@ -123,6 +142,8 @@ def main(args):
             inspect_payment(UUID(ids[0]))
         elif mode == "antifraude" and len(ids) == 1:
             inspect_antifraud(UUID(ids[0]))
+        elif mode == "pendientes-webpay" and not ids:
+            count_pending()
         elif mode == "orden" and len(ids) == 2:
             inspect_order(UUID(ids[0]), UUID(ids[1]))
         else:

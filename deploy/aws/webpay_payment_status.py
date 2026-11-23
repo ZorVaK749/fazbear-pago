@@ -20,13 +20,21 @@ def inspect(instance, mode, *ids):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--payment-id", type=UUID, required=True)
+    selection = parser.add_mutually_exclusive_group(required=True)
+    selection.add_argument("--payment-id", type=UUID)
+    selection.add_argument("--pendientes-webpay", action="store_true",
+                           help="Contar intentos Webpay sin estado final, sin exponer identificadores.")
     parser.add_argument("--antifraude", action="store_true",
                         help="Consultar los intentos simulados cercanos al pago de referencia.")
     args = parser.parse_args()
+    if args.antifraude and not args.payment_id:
+        parser.error("--antifraude requiere --payment-id")
     try:
         if aws("sts", "get-caller-identity")["Account"] != ACCOUNT:
             raise RolloutError("La sesión debe corresponder al laboratorio de EV3.")
+        if args.pendientes_webpay:
+            inspect(INSTANCE, "pendientes-webpay")
+            return 0
         payment_id = str(args.payment_id)
         if args.antifraude:
             inspect(INSTANCE, "antifraude", payment_id)

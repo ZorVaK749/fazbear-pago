@@ -14,6 +14,23 @@ import webpay_payment_status as cli
 
 
 class WebpayPaymentStatusTests(unittest.TestCase):
+    def test_pending_inventory_reads_only_unfinished_webpay_payments_and_reports_totals(self):
+        summary = {"por_estado": {"PENDING": 1}, "total_sin_estado_final": 1}
+        with patch.object(host, "payment_env", return_value=[]), \
+                patch.object(host, "read_row", return_value=summary) as read, redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(host.main(["pendientes-webpay"]), 0)
+        sql = read.call_args.args[1]
+        self.assertIn("BEGIN READ ONLY;", sql)
+        self.assertIn("NOT p.simulation AND p.status IN ('CREATING', 'CREATE_UNKNOWN', 'PENDING')", sql)
+        self.assertNotIn("provider_token", sql)
+        self.assertEqual(json.loads(out.getvalue()), summary)
+
+    def test_pending_inventory_only_runs_against_the_payment_instance(self):
+        with patch.object(sys, "argv", ["status", "--pendientes-webpay"]), \
+                patch.object(cli, "aws", return_value={"Account": cli.ACCOUNT}), patch.object(cli, "inspect") as inspect:
+            self.assertEqual(cli.main(), 0)
+        inspect.assert_called_once_with(cli.INSTANCE, "pendientes-webpay")
+
     def test_antifraud_reads_attempts_and_alerts_for_the_reference_account(self):
         payment = UUID("9105d229-9ef2-4adc-a85b-0ab3dd71e17a")
         result = {"intentos": [{"estado": "BLOCKED", "intentos_en_ventana": 4, "alerta_registrada": True}]}

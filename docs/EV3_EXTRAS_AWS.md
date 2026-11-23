@@ -552,6 +552,15 @@ python3 deploy/aws/webpay_release.py --apply --migration 6 --return-stage ev3 --
    comprobar el acceso público por `/ev3/`. Después del retiro, usar
    `frontend_image.py --verify --stage ev3` en las verificaciones.
 
+Antes de ese retiro, consultar el inventario Webpay en Pago. La consulta
+de PostgreSQL agrupa por estado los intentos Webpay sin resolver y emite
+solo totales. Incluye los intentos anteriores y posteriores al corte.
+
+```bash
+python3 deploy/aws/webpay_payment_status.py --pendientes-webpay &&
+python3 deploy/aws/frontend_gateway.py --dry-run
+```
+
 [CI de Angular y Nginx](https://github.com/ZorVaK749/fazbears-frontend/actions/runs/45085027149)
 · [CI de Pago](https://github.com/ZorVaK749/fazbear-pago/actions/runs/45081571579)
 · [CI de scripts AWS](https://github.com/ZorVaK749/fazbear-pago/actions/runs/45085224333)
@@ -564,6 +573,7 @@ confirmado. El artículo de la compra aprobada permaneció en el carrito.
 
 - [x] Confirmar la anulación desde Transbank bajo `/ev3/checkout/webpay` y que esa prueba no cree un pedido adicional.
 - [x] Desplegar Carrito por digest y Fargate `:16`, verificar ambos servicios y comprobar el retorno sintético por `/ev3/`.
+- [x] Confirmar Fargate `:17` con la corrección de reintentos y verificar el checkout y el retorno POST por `/ev3/`.
 - [ ] Comprobar tras el despliegue que el contador y el carrito persistido se vacían al confirmar un pago con Webpay.
 
 Carrito reutilizó el montaje H2 y su Target Group quedó healthy en dos
