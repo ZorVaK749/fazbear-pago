@@ -582,6 +582,26 @@ Si Firefox perdió el registro de red, `cart_cleanup_status.py` revisa la
 ruta y busca el estado HTTP alrededor de la hora de compra en los registros
 de acceso de API Gateway. Es una consulta de solo lectura y su salida
 excluye rutas completas, revisiones e identificadores de clientes.
+La consulta del pedido `#132` confirmó la ruta por ítem con JWT. El stage
+backend `ev3` carecía de un grupo de registros de acceso, por lo que la
+respuesta de esa operación sigue sin identificarse.
+
+La prueba Angular del regreso a una vista nueva verificó que Carrito
+recibe la revisión cotizada y queda vacío cuando coincide. Otra prueba
+reprodujo el caso de un error HTTP 503 al iniciar Webpay, seguido de una
+edición del carrito. El reintento ahora conserva la revisión vinculada a
+la cotización original y deja guardado el carrito editado.
+
+Con Carrito ya actualizado, aplicar la corrección de reintentos al frontend.
+
+```bash
+cd "$HOME/pedidos360-ops-pago" &&
+python3 deploy/aws/frontend_image.py --apply --stage ev3 --image \
+  ghcr.io/zorvak749/fazbears-frontend@sha256:3bfd7a74c8ae6354d1565224292925f93129e67542203a28264d17036749e296 &&
+python3 deploy/aws/frontend_gateway.py --verify
+```
+
+[CI de la corrección de reintentos](https://github.com/ZorVaK749/fazbears-frontend/actions/runs/45103663612)
 
 El frontend guarda en la pestaña la referencia del carrito al iniciar
 Webpay. Después de confirmar el pedido, Carrito elimina los artículos
@@ -600,10 +620,10 @@ python3 deploy/aws/frontend_image.py --apply --stage ev3 --image \
 python3 deploy/aws/frontend_gateway.py --verify
 ```
 
-Tras el corte, iniciar una compra nueva en `/ev3/checkout`. Al ver
-**Pago efectuado**, pulsar **Volver al checkout** y recargar la página.
-El carrito debe seguir vacío. Si se editó en otra pestaña durante el pago,
-el recibo pide revisar su contenido y los artículos quedan guardados.
+En una compra posterior desde `/ev3/checkout`, al ver **Pago efectuado**,
+pulsar **Volver al checkout** y recargar la página. El carrito debe seguir
+vacío. Si se editó en otra pestaña durante el pago, el recibo pide revisar
+su contenido y los artículos quedan guardados.
 
 Para volver a la versión anterior tras una activación completa, aplicar
 primero la imagen del frontend `sha256:b83a0c7bd4db18ef65de682203e0947c775b5218f4734329c7d9d424d3561c59`
