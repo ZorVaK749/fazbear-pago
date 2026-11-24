@@ -4,6 +4,7 @@
 import argparse
 import ast
 from contextlib import nullcontext
+from datetime import datetime, timedelta, timezone
 import ipaddress
 import json
 import os
@@ -200,7 +201,7 @@ def security_group(vpc, suffix, rule):
     return group_id
 
 
-def target(vpc):
+def target(vpc, *, create=True):
     found = aws("elbv2", "describe-target-groups", "--names", TARGET_GROUP,
                 absent=("TargetGroupNotFound",)).get("TargetGroups", [])
     if found:
@@ -210,6 +211,7 @@ def target(vpc):
                 and group["Port"] == PORT and group["TargetType"] == "ip",
                 "El Target Group existente no coincide con la recuperación")
         return arn
+    require(create, "Todavía no existe el Target Group de Kafka")
     return aws("elbv2", "create-target-group", payload={
         "Name": TARGET_GROUP, "VpcId": vpc, "Port": PORT, "Protocol": "TCP", "TargetType": "ip",
         "HealthCheckProtocol": "TCP", "HealthCheckIntervalSeconds": 10, "Tags": [TAG],
@@ -299,10 +301,49 @@ def deploy(vpc, client_ips, load_balancer, service, original):
     return target_arn
 
 
-def metadata_probe():
+def metadata_probe(refresh_neighbor=False):
     return f"""python3 - <<'PY'
+import errno
+import json
 import socket
 import struct
+import subprocess
+
+address, port = {ADDRESS!r}, {PORT}
+refresh = {refresh_neighbor!r}
+
+def ip_json(*arguments):
+    result = subprocess.run(['ip', '-j', '-4', *arguments], capture_output=True, text=True, check=True)
+    return json.loads(result.stdout)
+
+route = ip_json('route', 'get', address)[0]
+interface = route['dev']
+print('Ruta desde', route.get('prefsrc', route.get('src', '?')), 'dev', interface,
+      'via', route.get('gateway', 'directa'), flush=True)
+
+def neighbor():
+    entries = ip_json('neigh', 'show', 'to', address, 'dev', interface)
+    return entries[0] if entries else {{}}
+
+def connect():
+    try:
+        return socket.create_connection((address, port), timeout=7)
+    except OSError as error:
+        entry = neighbor()
+        states = entry.get('state', [])
+        print('Primer intento:', type(error).__name__, 'vecino:', states, entry.get('lladdr', '-'), flush=True)
+        retryable = isinstance(error, TimeoutError) or error.errno == errno.EHOSTUNREACH
+        if not refresh or not retryable or route.get('gateway') or not entry or {{'PERMANENT', 'NOARP'}} & set(states):
+            raise
+        subprocess.run(['ip', '-4', 'neigh', 'del', address, 'dev', interface],
+                       capture_output=True, text=True, check=True)
+        print('Vecino del broker renovado. Reintentando TCP.', flush=True)
+        try:
+            return socket.create_connection((address, port), timeout=7)
+        except OSError:
+            entry = neighbor()
+            print('Vecino después del reintento:', entry.get('state', []), entry.get('lladdr', '-'), flush=True)
+            raise
 
 def receive(connection, length):
     content = bytearray()
@@ -313,7 +354,7 @@ def receive(connection, length):
         content.extend(chunk)
     return content
 
-with socket.create_connection(('{ADDRESS}', {PORT}), timeout=8) as connection:
+with connect() as connection:
     request = struct.pack('>hhih', 3, 0, 1, 3) + b'ev3' + struct.pack('>i', 0)
     connection.sendall(struct.pack('>i', len(request)) + request)
     length = struct.unpack('>i', receive(connection, 4))[0]
@@ -324,15 +365,32 @@ with socket.create_connection(('{ADDRESS}', {PORT}), timeout=8) as connection:
     if correlation != 1 or count != 1:
         raise ValueError('Se esperaba exactamente un broker de laboratorio')
     _, size = struct.unpack_from('>ih', data, 8)
-    host = data[14:14 + size].decode()
-    port = struct.unpack_from('>i', data, 14 + size)[0]
-    if (host, port) != ('{ADDRESS}', {PORT}):
+    advertised_host = data[14:14 + size].decode()
+    advertised_port = struct.unpack_from('>i', data, 14 + size)[0]
+    if (advertised_host, advertised_port) != (address, port):
         raise ValueError('Kafka anuncia una dirección distinta del bootstrap')
-    print('Kafka Metadata OK', host, port)
+    print('Kafka Metadata OK', advertised_host, advertised_port)
 PY"""
 
 
-def verify(target_arn):
+def print_balance_metrics(load_balancer):
+    dimension = load_balancer["LoadBalancerArn"].split("loadbalancer/", 1)[1]
+    end = datetime.now(timezone.utc)
+    start = end - timedelta(minutes=15)
+    for metric in ("SecurityGroupBlockedFlowCount_Inbound", "SecurityGroupBlockedFlowCount_Outbound"):
+        try:
+            stats = aws("cloudwatch", "get-metric-statistics", "--namespace", "AWS/NetworkELB",
+                        "--metric-name", metric, "--dimensions", f"Name=LoadBalancer,Value={dimension}",
+                        "--start-time", start.isoformat(), "--end-time", end.isoformat(),
+                        "--period", "60", "--statistics", "Sum")["Datapoints"]
+            value = int(sum(point["Sum"] for point in stats)) if stats else "sin datos"
+            print(f"NLB {metric} (15 min): {value}")
+        except RecoveryError as error:
+            print(f"No se pudo consultar la métrica del NLB: {error}")
+            break
+
+
+def verify(target_arn, *, refresh_neighbor=False, load_balancer=None):
     print("Esperando al broker y a su Target Group", flush=True)
     deadline = time.monotonic() + 480
     while time.monotonic() < deadline:
@@ -347,7 +405,7 @@ def verify(target_arn):
     command = aws("ssm", "send-command", payload={
         "InstanceIds": list(CLIENTS.values()), "DocumentName": "AWS-RunShellScript",
         "Comment": "Pedidos360 EV3 Kafka metadata",
-        "Parameters": {"commands": [metadata_probe()], "executionTimeout": ["20"]},
+        "Parameters": {"commands": [metadata_probe(refresh_neighbor)], "executionTimeout": ["30"]},
     })["Command"]["CommandId"]
     print(f"SSM Metadata: {command}", flush=True)
     deadline = time.monotonic() + 75
@@ -367,8 +425,15 @@ def verify(target_arn):
             f"Kafka Metadata OK {ADDRESS} {PORT}" in plugin.get("Output", "")
             for plugin in row.get("CommandPlugins", []))
         print(f"{name}: {'Kafka Metadata OK' if passed else row.get('Status', 'sin respuesta SSM')}")
+        if refresh_neighbor or not passed:
+            for plugin in row.get("CommandPlugins", []):
+                output = plugin.get("Output", "")
+                if output.strip():
+                    print(output.strip())
         if not passed:
             failed.append(name)
+    if failed and load_balancer is not None:
+        print_balance_metrics(load_balancer)
     require(not failed, "Queda pendiente verificar Kafka desde " + ", ".join(failed))
 
 
@@ -377,13 +442,23 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--lab-config", type=Path, default=Path.home() / "kafka_recovery.py",
                         help="archivo privado de CloudShell con los identificadores de la cuenta")
-    parser.add_argument("--apply", action="store_true", help="crea y verifica Kafka privado en la cuenta EV3")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--apply", action="store_true", help="crea y verifica Kafka privado en la cuenta EV3")
+    mode.add_argument("--verify", action="store_true", help="prueba el Kafka existente sin recrearlo")
+    parser.add_argument("--refresh-neighbor", action="store_true",
+                        help="con --verify renueva solo el vecino del broker si falla la conexión TCP")
     args = parser.parse_args()
+    if args.refresh_neighbor and not args.verify:
+        parser.error("--refresh-neighbor requiere --verify")
     try:
         ACCOUNT, SUBNET, ADDRESS, CLIENTS = load_lab_config(args.lab_config)
         state = preflight()
         if args.apply:
             verify(deploy(*state))
+        elif args.verify:
+            vpc, _, load_balancer, service, _ = state
+            require(load_balancer and service, "Se necesitan el NLB y el servicio de recuperación existentes")
+            verify(target(vpc, create=False), refresh_neighbor=args.refresh_neighbor, load_balancer=load_balancer)
         else:
             print("Inspección correcta. --apply crea un NLB interno, dos grupos privados y un servicio Fargate.")
     except (RecoveryError, OSError, KeyError, ValueError, SyntaxError) as error:
