@@ -26,8 +26,7 @@ def settings(broker):
     return {
         "SERVER_ADDRESS": "127.0.0.1",
         "SERVER_PORT": str(PORT),
-        "MANAGEMENT_SERVER_ADDRESS": "127.0.0.1",
-        "MANAGEMENT_SERVER_PORT": str(PORT),
+        "MANAGEMENT_SERVER_PORT": "-1",
         "KAFKA_BROKERCONNECT": broker,
         "JVM_OPTS": "-Xms32m -Xmx80m -Xss384k -XX:+UseSerialGC -XX:ActiveProcessorCount=2",
         "CMD_ARGS": "--topic.createEnabled=false --topic.deleteEnabled=false "
@@ -35,7 +34,7 @@ def settings(broker):
     }
 
 
-def current_container(environment):
+def current_container(environment, *, replace_legacy=False):
     result = subprocess.run(["docker", "container", "inspect", NAME],
                             capture_output=True, text=True, timeout=10)
     if result.returncode and f"No such container: {NAME}" in result.stderr:
@@ -46,11 +45,22 @@ def current_container(environment):
     labels = config.get("Labels") or {}
     label, value = LABEL.split("=", 1)
     active_env = dict(item.split("=", 1) for item in config["Env"] if "=" in item)
-    if (labels.get(label) != value or config["Image"] != IMAGE
-            or container["HostConfig"]["NetworkMode"] != "host"
-            or any(active_env.get(key) != value for key, value in environment.items())):
+    same_container = (labels.get(label) == value and config["Image"] == IMAGE
+                      and container["HostConfig"]["NetworkMode"] == "host")
+    if same_container and all(active_env.get(key) == value for key, value in environment.items()):
+        return container["State"]["Running"]
+    legacy_env = {**environment, "MANAGEMENT_SERVER_PORT": str(PORT),
+                  "MANAGEMENT_SERVER_ADDRESS": "127.0.0.1"}
+    if not (replace_legacy and same_container
+            and all(active_env.get(key) == value for key, value in legacy_env.items())):
         raise RuntimeError("El nombre del panel ya está ocupado por otra configuración. Revísela antes de cambiarla.")
-    return container["State"]["Running"]
+
+    # The previous settings caused a startup loop. Retain the old container for inspection.
+    subprocess.run(["docker", "stop", "--time", "10", NAME], check=True, timeout=25)
+    backup = f"{NAME}-antes-{container['Id'][:12]}"
+    subprocess.run(["docker", "rename", NAME, backup], check=True, timeout=15)
+    print(f"Kafdrop anterior detenido y conservado como {backup}")
+    return None
 
 
 def launch(broker, environment, existing):
@@ -151,10 +161,10 @@ def main():
     args = parser.parse_args()
     environment = settings(args.broker)
     try:
-        existing = current_container(environment)
         if args.mode == "diagnose":
             diagnose(args.broker)
             return 0
+        existing = current_container(environment, replace_legacy=args.mode == "apply")
         if not existing:
             if args.mode == "verify":
                 raise RuntimeError("Kafka UI está detenido o falta instalarlo. Use --apply en CloudShell.")

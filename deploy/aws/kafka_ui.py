@@ -11,7 +11,7 @@ import time
 from clp_inventory import SERVICES as EC2_SERVICES
 from frontend_image import FAMILY as FRONTEND_SERVICE
 from kafka_recovery import CLUSTER, PORT, REGION, SERVICE as BROKER_SERVICE, RecoveryError, load_lab_config, require
-from kafka_ui_host import LABEL, MIN_AVAILABLE_MB
+from kafka_ui_host import LABEL, MIN_AVAILABLE_MB, NAME
 from webpay import RolloutError, aws, run_ssm
 
 
@@ -19,7 +19,8 @@ PROXY_DIR = "/opt/pedidos360-kafka-ui"
 PROXY_FILES = ("Caddyfile.kafka-ui", "compose.kafka-ui-proxy.yml")
 HOST_CAPACITY_COMMANDS = [
     "awk '/^MemAvailable:/ {print int($2 / 1024)}' /proc/meminfo",
-    f"docker ps -a --quiet --filter label={shlex.quote(LABEL)} | wc -l",
+    f"docker ps -a --quiet --filter label={shlex.quote(LABEL)} "
+    f"--filter {shlex.quote(f'name=^/{NAME}$')} | wc -l",
 ]
 
 
