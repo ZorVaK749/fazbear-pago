@@ -1,13 +1,69 @@
 #!/usr/bin/env python3
-"""Start or check the private EV3 Kafka UI on the Productos EC2."""
+"""Start or check the private EV3 Kafka UI on a Kafka client EC2."""
 
 import argparse
 from pathlib import Path
 import shlex
 import sys
+import time
 
 from kafka_recovery import PORT, REGION, RecoveryError, load_lab_config, require
+from kafka_ui_host import LABEL, MEMORY_MB
 from webpay import RolloutError, aws, run_ssm
+
+
+def find_host(clients, subnet, deploy):
+    clients = {name: instance for name, instance in clients.items() if name != "Pago"}
+    result = aws("ec2", "describe-instances", "--instance-ids", *clients.values())
+    active = {vm["InstanceId"] for reservation in result["Reservations"] for vm in reservation["Instances"]
+              if vm["State"]["Name"] == "running" and vm["SubnetId"] == subnet}
+    require(active, "No hay EC2 candidatas activas en la subred del laboratorio")
+    command = aws("ssm", "send-command", input_json={
+        "DocumentName": "AWS-RunShellScript",
+        "InstanceIds": sorted(active),
+        "Comment": "Pedidos360 Kafka UI capacidad",
+        "Parameters": {
+            "commands": [
+                "awk '/^MemAvailable:/ {print int($2 / 1024)}' /proc/meminfo",
+                f"docker ps -a --quiet --filter label={shlex.quote(LABEL)} | wc -l",
+            ],
+            "executionTimeout": ["15"],
+        },
+        "TimeoutSeconds": 30,
+    })["Command"]["CommandId"]
+    print(f"SSM capacidad: {command}", flush=True)
+    deadline = time.monotonic() + 45
+    terminal = {"Success", "Failed", "TimedOut", "Cancelled"}
+    while True:
+        result = aws("ssm", "list-command-invocations", "--command-id", command, "--details")
+        rows = {row["InstanceId"]: row for row in result["CommandInvocations"]}
+        if (active <= rows.keys() and all(rows[vm]["Status"] in terminal for vm in active)
+                or time.monotonic() >= deadline):
+            break
+        time.sleep(2)
+
+    installed = []
+    available = []
+    for name, instance in clients.items():
+        row = rows.get(instance, {})
+        plugins = row.get("CommandPlugins", [])
+        output = plugins[0].get("Output", "").split() if plugins else []
+        if row.get("Status") != "Success" or len(output) != 2 or not all(part.isdecimal() for part in output):
+            print(f"{name} · capacidad sin verificar")
+            continue
+        memory, containers = map(int, output)
+        print(f"{name} · {memory} MiB libres" + (" · panel existente" if containers else ""))
+        if containers:
+            installed.append((name, instance))
+        elif memory >= MEMORY_MB:
+            available.append((memory, name, instance))
+    require(len(installed) <= 1, "Hay más de un panel instalado. Revise el inventario antes de continuar")
+    if installed:
+        return installed[0]
+    require(deploy, "Kafka UI todavía no está instalado en las EC2 verificadas")
+    require(available, f"Ninguna EC2 candidata tiene los {MEMORY_MB} MiB necesarios para Kafka UI")
+    _, name, instance = max(available)
+    return name, instance
 
 
 def main():
@@ -21,16 +77,12 @@ def main():
         account, subnet, broker, clients = load_lab_config(args.lab_config)
         require(aws("sts", "get-caller-identity")["Account"] == account,
                 "Use la cuenta AWS del laboratorio EV3")
-        instance = clients["Productos"]
-        result = aws("ec2", "describe-instances", "--instance-ids", instance)
-        target = result["Reservations"][0]["Instances"][0]
-        require(target["State"]["Name"] == "running" and target["SubnetId"] == subnet,
-                "La EC2 de Productos debe estar activa en la subred del laboratorio")
+        name, instance = find_host(clients, subnet, args.apply)
 
         source = Path(__file__).with_name("kafka_ui_host.py").read_text(encoding="utf-8")
         mode = "apply" if args.apply else "verify"
         arguments = shlex.join([mode, f"{broker}:{PORT}"])
-        print(f"Kafka UI · EC2 de Productos {instance} · {REGION}", flush=True)
+        print(f"Kafka UI · EC2 de {name} {instance} · {REGION}", flush=True)
         run_ssm({
             "DocumentName": "AWS-RunShellScript",
             "InstanceIds": [instance],
