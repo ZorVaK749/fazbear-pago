@@ -64,6 +64,7 @@ def template():
                           "AllowedPattern": r"^$|^ghcr\.io/zorvak749/fazbears-frontend@sha256:[a-f0-9]{64}$"},
         "DemoCidr": {"Type": "String", "Default": "", "AllowedPattern": r"^$|^[0-9.]+/32$"},
         "PublicAcme": {"Type": "String", "Default": "false", "AllowedValues": ["true", "false"]},
+        "DataContainers": {"Type": "String", "Default": "false", "AllowedValues": ["true", "false"]},
     }
     outputs = {
         "Frontend": {"Value": sub("${Endpoint}/ev3/", {"Endpoint": endpoint("FrontendApi")})},
@@ -117,8 +118,10 @@ def template():
         group = f"{name}Sg"
         sg(group)
         allow(f"{name}FromAlb", group, port, source="AlbSg")
-        add(name, "AWS::EC2::Instance", depends_on=network_ready, ImageId=ref("Ami"),
-            InstanceType="t3.small" if name == "Analytics" else "t3.micro",
+        size = "t3.small" if name == "Analytics" else "t3.micro"
+        if name in ("Pago", "Notificaciones"):
+            size = {"Fn::If": ["WithData", "t3.small", size]}
+        add(name, "AWS::EC2::Instance", depends_on=network_ready, ImageId=ref("Ami"), InstanceType=size,
             IamInstanceProfile=ref("InstanceProfile"), MetadataOptions={"HttpTokens": "required"},
             NetworkInterfaces=[{"DeviceIndex": "0", "AssociatePublicIpAddress": True,
                                 "SubnetId": ref("SubnetA"), "GroupSet": [ref(group)]}],
@@ -143,6 +146,10 @@ def template():
         allow(f"{destination}From{source}", f"{destination}Sg", SERVICES[destination][0], source=f"{source}Sg")
     for name in KAFKA_CLIENTS:
         allow(f"KafkaNlbFrom{name}", "KafkaNlbSg", 9092, source=f"{name}Sg")
+    for name in ("Productos", "Pago", "Orden", "Analytics", "Fidelizacion"):
+        allow(f"PostgresFrom{name}", "PagoSg", 5432, source=f"{name}Sg", condition="WithData")
+    for name in ("Productos", "Orden", "Notificaciones", "Reportes"):
+        allow(f"RabbitFrom{name}", "NotificacionesSg", 5672, source=f"{name}Sg", condition="WithData")
     add("AnalyticsEip", "AWS::EC2::EIP", condition="Demo", depends_on="IgwAttachment",
         Domain="vpc", InstanceId=ref("Analytics"))
     allow("DemoHttps", "AnalyticsSg", 18443, cidr=ref("DemoCidr"), condition="Demo")
@@ -235,6 +242,7 @@ exec /docker-entrypoint.sh nginx -g 'daemon off;'
             "Parameters": parameters, "Resources": resources, "Outputs": outputs,
             "Conditions": {"Demo": {"Fn::Not": [{"Fn::Equals": [ref("DemoCidr"), ""]}]},
                            "Acme": {"Fn::And": [{"Condition": "Demo"}, {"Fn::Equals": [ref("PublicAcme"), "true"]}]},
+                           "WithData": {"Fn::Equals": [ref("DataContainers"), "true"]},
                            "WithFrontend": {"Fn::Not": [{"Fn::Equals": [ref("FrontendImage"), ""]}]}}}
 
 
@@ -290,6 +298,8 @@ def deploy(args):
             parameters.append(f"PublicAcme={str(args.public_acme).lower()}")
         if args.frontend_image:
             parameters.append(f"FrontendImage={args.frontend_image}")
+        if args.data_containers:
+            parameters.append("DataContainers=true")
         deploy_stack(path, flags, parameters)
     if not args.plan:
         stack = aws("cloudformation", "describe-stacks", "--stack-name", STACK)["Stacks"][0]
@@ -309,6 +319,7 @@ def main():
     parser.add_argument("--demo-cidr", default="", help="public IPv4 /32 for access to Kafdrop via HTTPS")
     parser.add_argument("--public-acme", action=argparse.BooleanOptionalAction,
                         help="open or close HTTP-01 certificate validation on Analytics")
+    parser.add_argument("--data-containers", action="store_true", help="prepare private PostgreSQL and RabbitMQ hosts")
     args = parser.parse_args()
     if args.render:
         print(json.dumps(template(), indent=2))
