@@ -12,7 +12,7 @@ from pathlib import Path
 
 
 REGION = "us-east-1"
-STACK = "pedidos360-ev3-replica"
+STACK = "pedidos360-ev3-respaldo"
 TENANT = "ee0d2c5b-e60b-4c57-9b30-8a38a520c430"
 AUDIENCE = "304fa289-2b72-447b-9c48-f00998f7c22f"
 ORIGINAL_API = "uuzifgcyd2.execute-api.us-east-1.amazonaws.com"
@@ -166,7 +166,7 @@ def template():
             RequestParameters={"overwrite:path": "$request.path"})
         authorization = {"AuthorizationType": "NONE"}
         if prefix == "Backend":
-            add("Entra", "AWS::ApiGatewayV2::Authorizer", Name="Microsoft Entra", ApiId=ref(api),
+            add("Entra", "AWS::ApiGatewayV2::Authorizer", Name="Microsoft-Entra", ApiId=ref(api),
                 AuthorizerType="JWT", IdentitySource=["$request.header.Authorization"],
                 JwtConfiguration={"Issuer": f"https://login.microsoftonline.com/{TENANT}/v2.0",
                                   "Audience": [AUDIENCE, f"api://{AUDIENCE}"]})
@@ -245,6 +245,25 @@ def aws(*arguments, capture=True):
     return json.loads(result.stdout) if capture else None
 
 
+def deploy_stack(path, flags, parameters):
+    try:
+        aws("cloudformation", "deploy", "--stack-name", STACK, "--template-file", str(path),
+            "--no-fail-on-empty-changeset", *flags, "--parameter-overrides", *parameters, capture=False)
+    except RuntimeError:
+        try:
+            events = aws("cloudformation", "describe-stack-events", "--stack-name", STACK)["StackEvents"]
+        except (OSError, RuntimeError, ValueError):
+            events = []
+        failures = {}
+        for event in events:
+            reason = event.get("ResourceStatusReason", "")
+            if event["ResourceStatus"].endswith("_FAILED") and reason and "cancelled" not in reason.lower():
+                failures.setdefault(event["LogicalResourceId"], reason)
+        for resource_name, reason in failures.items():
+            print(f"{resource_name}: {reason}", file=sys.stderr)
+        raise
+
+
 def deploy(args):
     identity = aws("sts", "get-caller-identity")
     if identity["Account"] != args.account:
@@ -270,8 +289,7 @@ def deploy(args):
             parameters.append(f"PublicAcme={str(args.public_acme).lower()}")
         if args.frontend_image:
             parameters.append(f"FrontendImage={args.frontend_image}")
-        aws("cloudformation", "deploy", "--stack-name", STACK, "--template-file", str(path),
-            "--no-fail-on-empty-changeset", *flags, "--parameter-overrides", *parameters, capture=False)
+        deploy_stack(path, flags, parameters)
     if not args.plan:
         stack = aws("cloudformation", "describe-stacks", "--stack-name", STACK)["Stacks"][0]
         for item in stack.get("Outputs", []):
