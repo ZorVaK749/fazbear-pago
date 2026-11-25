@@ -1,6 +1,6 @@
 # Kafka UI para Pedidos360 EV3
 
-El broker Kafka funciona como un servicio independiente en ECS Fargate. Los microservicios acceden al broker por el balanceador privado. Kafbat UI proporciona el panel de observación en un contenedor aparte en una EC2 con capacidad disponible. Lee el mismo broker que utiliza la aplicación. La revisión fija Kafbat UI 1.5.1 por su digest publicado.
+El broker Kafka funciona como un servicio independiente en ECS Fargate. Los microservicios acceden al broker por el balanceador privado. Kafdrop proporciona el panel de observación en un contenedor aparte en una EC2 con capacidad disponible. Lee el mismo broker que utiliza la aplicación. Se usa Kafdrop 4.3.1, fijado por digest, con 256 MiB de memoria y medio CPU como límites.
 
 ## Activar en AWS
 
@@ -12,7 +12,7 @@ git pull --ff-only origin ev3/webpay-integracion &&
 python3 deploy/aws/kafka_ui.py --apply
 ```
 
-El script valida la cuenta, consulta por SSM la memoria libre de las EC2 candidatas (Productos, Carrito, Analytics y Fidelización) y comprueba que el panel puede listar los tópicos del broker. El panel escucha en `127.0.0.1:18090` de la instancia, con el clúster en modo de solo lectura. La operación reutiliza el contenedor si ya tiene la configuración esperada.
+El script valida la cuenta, consulta por SSM la memoria libre de las EC2 candidatas (Productos, Carrito, Analytics y Fidelización) y comprueba que el panel puede listar los tópicos del broker. El panel escucha en `127.0.0.1:18090` de la instancia. La interfaz tiene deshabilitada la creación y eliminación de tópicos y el envío de mensajes. La operación reutiliza el contenedor si ya tiene la configuración esperada.
 
 Para revisar el panel después de reiniciar el laboratorio:
 
@@ -31,8 +31,8 @@ En PowerShell de tu PC, usa AWS CLI y el complemento de Session Manager con una 
 aws ssm start-session --region us-east-1 --target ID-EC2 --document-name AWS-StartPortForwardingSession --parameters 'portNumber=18090,localPortNumber=18090'
 ```
 
-Mientras el túnel esté abierto, entra a [Kafbat UI](http://127.0.0.1:18090/) en Firefox. Selecciona **pedidos360 → Topics** y busca `producto.interaccion.v1`, `carrito.actualizado.v1` o `pago.aprobado.v1`. Para revisar el procesamiento, abre **Consumers** y mira los grupos y su retraso. Una interacción de catálogo genera evidencia en el tópico de Productos y en **Mi actividad**.
+Mientras el túnel esté abierto, entra a [Kafka UI](http://127.0.0.1:18090/) en Firefox. Busca `producto.interaccion.v1`, `carrito.actualizado.v1` o `pago.aprobado.v1` en **Topics**. Abre un tópico para revisar sus mensajes y el retraso de sus grupos de consumidores. Una interacción de catálogo genera evidencia en el tópico de Productos y en **Mi actividad**.
 
 - [Instalar AWS CLI en Windows](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html)
 - [Instalar el complemento de Session Manager](https://docs.aws.amazon.com/systems-manager/latest/userguide/install-plugin-windows.html)
-- [Documentación de Kafbat UI](https://ui.docs.kafbat.io/)
+- [Documentación de Kafdrop](https://github.com/obsidiandynamics/kafdrop)

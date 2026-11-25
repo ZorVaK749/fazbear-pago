@@ -8,7 +8,7 @@ import sys
 import time
 
 from kafka_recovery import PORT, REGION, RecoveryError, load_lab_config, require
-from kafka_ui_host import LABEL, MEMORY_MB
+from kafka_ui_host import LABEL, MIN_AVAILABLE_MB
 from webpay import RolloutError, aws, run_ssm
 
 
@@ -55,13 +55,13 @@ def find_host(clients, subnet, deploy):
         print(f"{name} · {memory} MiB libres" + (" · panel existente" if containers else ""))
         if containers:
             installed.append((name, instance))
-        elif memory >= MEMORY_MB:
+        elif memory >= MIN_AVAILABLE_MB:
             available.append((memory, name, instance))
     require(len(installed) <= 1, "Hay más de un panel instalado. Revise el inventario antes de continuar")
     if installed:
         return installed[0]
     require(deploy, "Kafka UI todavía no está instalado en las EC2 verificadas")
-    require(available, f"Ninguna EC2 candidata tiene los {MEMORY_MB} MiB necesarios para Kafka UI")
+    require(available, f"Ninguna EC2 candidata tiene los {MIN_AVAILABLE_MB} MiB necesarios para Kafka UI")
     _, name, instance = max(available)
     return name, instance
 
