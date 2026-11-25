@@ -130,3 +130,59 @@ class FrontendGatewayTests(unittest.TestCase):
                 patch.object(gateway, "expect_not_found") as unavailable, redirect_stdout(io.StringIO()):
             gateway.verify_named_stage(retired=True)
         self.assertEqual([call.args[0] for call in unavailable.call_args_list], ["/", "/ev3/_verificacion/ruta-inexistente"])
+
+    def test_keep_default_only_verifies_fallback_before_removing_checkout_routes(self):
+        greedy = {**self.default_route, "RouteId": "greedy", "RouteKey": gateway.GREEDY_ROUTE,
+                  "Target": gateway.SHADOWING_TARGET}
+        checkout = {**self.default_route, "RouteId": "callback", "RouteKey": "POST /checkout/webpay"}
+        default = {"$default": self.default_route}
+        routes = {**default, gateway.GREEDY_ROUTE: greedy, "POST /checkout/webpay": checkout}
+        active = {"$default": self.default_stage, "ev3": {"AutoDeploy": True, "DeploymentId": "ev3-before"}}
+        intermediate = {name: {**stage, "DeploymentId": "intermediate-" + name} for name, stage in active.items()}
+        final = {name: {**stage, "DeploymentId": "final-" + name} for name, stage in active.items()}
+        journal = []
+
+        with TemporaryDirectory() as directory, \
+                patch.object(gateway, "inventory", side_effect=[
+                    (routes, active, self.target), (routes, intermediate, self.target), (default, final, self.target)]), \
+                patch.object(gateway, "verify_proxy_checkout"), \
+                patch.object(gateway, "verify_default_proxy", side_effect=lambda: journal.append("verify")), \
+                patch.object(gateway, "aws", side_effect=lambda *args: journal.append((args[1], args[-1]))), \
+                redirect_stdout(io.StringIO()):
+            backup = Path(directory) / "routes.json"
+            gateway.execute("keep-default-only", backup)
+            self.assertEqual(json.loads(backup.read_text(encoding="utf-8"))["routes"][gateway.GREEDY_ROUTE], greedy)
+
+        self.assertEqual(journal, [
+            ("delete-route", "greedy"), ("create-deployment", "$default"), "verify",
+            ("delete-route", "callback"), ("create-deployment", "$default"), "verify",
+        ])
+
+    def test_keep_default_only_leaves_checkout_aliased_if_proxy_check_fails(self):
+        greedy = {**self.default_route, "RouteId": "greedy", "RouteKey": gateway.GREEDY_ROUTE,
+                  "Target": gateway.SHADOWING_TARGET}
+        checkout = {**self.default_route, "RouteId": "callback", "RouteKey": "POST /checkout/webpay"}
+        preserved = {"$default": self.default_route, "POST /checkout/webpay": checkout}
+        stages = {name: {"AutoDeploy": True, "DeploymentId": "active"} for name in ("$default", "ev3")}
+        with TemporaryDirectory() as directory, \
+                patch.object(gateway, "inventory", side_effect=[
+                    ({**preserved, gateway.GREEDY_ROUTE: greedy}, stages, self.target),
+                    (preserved, stages, self.target)]), \
+                patch.object(gateway, "verify_proxy_checkout"), \
+                patch.object(gateway, "wait_for", side_effect=[gateway.RolloutError("Proxy 503"), None]), \
+                patch.object(gateway, "aws") as aws, redirect_stdout(io.StringIO()):
+            with self.assertRaisesRegex(gateway.RolloutError, "Rutas anteriores restauradas"):
+                gateway.execute("keep-default-only", Path(directory) / "routes.json")
+
+        self.assertEqual([call.args[1] for call in aws.call_args_list], ["delete-route", "create-route"])
+        self.assertEqual(aws.call_args_list[0].args[-1], "greedy")
+        self.assertEqual(aws.call_args.kwargs["input_json"]["Target"], gateway.SHADOWING_TARGET)
+
+    def test_verify_accepts_only_default_with_a_live_named_stage(self):
+        with patch.object(gateway, "inventory", return_value=(
+                    {"$default": self.default_route}, {"ev3": {"DeploymentId": "active"}}, self.target)), \
+                patch.object(gateway, "fetch", return_value="<app-root></app-root><script>'/ev3/'</script>"), \
+                patch.object(gateway, "verify_checkout"), patch.object(gateway, "verify_post_return") as post, \
+                redirect_stdout(io.StringIO()):
+            gateway.execute("verify")
+            post.assert_called_once_with("/ev3")
