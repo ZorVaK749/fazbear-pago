@@ -3,11 +3,12 @@
 import argparse
 import json
 from pathlib import Path
+import re
 import socket
 import subprocess
 import sys
 import time
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 from urllib.request import ProxyHandler, Request, build_opener
 
 
@@ -98,14 +99,58 @@ def verify():
         print(f"{topic} · {status}")
 
 
+def diagnose(broker):
+    state = subprocess.check_output([
+        "docker", "container", "inspect", "--format",
+        "{{.State.Status}} · OOM={{.State.OOMKilled}} · código={{.State.ExitCode}} · reinicios={{.RestartCount}}",
+        NAME,
+    ], text=True, timeout=10)
+    print(f"Contenedor · {state.strip()}")
+    host, port = broker.rsplit(":", 1)
+    try:
+        with socket.create_connection((host, int(port)), timeout=4):
+            print("Broker · conexión TCP disponible")
+    except OSError as error:
+        print(f"Broker · {type(error).__name__}")
+    sockets = subprocess.check_output(["ss", "-ltnH"], text=True, timeout=5)
+    for line in sockets.splitlines():
+        address = line.split()[3]
+        if address.rpartition(":")[2] in {"9000", str(PORT)}:
+            print(f"Escucha · {address}")
+
+    opener = build_opener(ProxyHandler({}))
+    for path, accept in (("/", "text/html"), ("/topic", "application/json")):
+        try:
+            request = Request(URL + path, headers={"Accept": accept})
+            with opener.open(request, timeout=12) as response:
+                print(f"{path} · HTTP {response.status} · {response.headers.get_content_type()}")
+                if path == "/topic":
+                    data = json.load(response)
+                    print(f"Tópicos · tipo {type(data).__name__} · {len(data)} elementos")
+        except HTTPError as error:
+            print(f"{path} · HTTP {error.code}")
+        except (URLError, OSError, ValueError, TypeError) as error:
+            print(f"{path} · {type(getattr(error, 'reason', error)).__name__}")
+
+    logs = subprocess.run(["docker", "logs", "--tail", "120", NAME],
+                          capture_output=True, text=True, timeout=10, check=True)
+    indicators = r"OutOfMemoryError|BindException|TimeoutException|UnknownHostException|ConnectException|BeanCreationException|UnsupportedClassVersionError|Failed to start|APPLICATION FAILED TO START|Started Kafdrop|Tomcat started"
+    errors = sorted(set(re.findall(indicators, logs.stdout + logs.stderr)))
+    if errors:
+        print("Indicadores en el log · " + ", ".join(errors))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=("apply", "verify"))
+    parser.add_argument("mode", choices=("apply", "verify", "diagnose"))
     parser.add_argument("broker")
     args = parser.parse_args()
     environment = settings(args.broker)
     try:
         existing = current_container(environment)
+        if args.mode == "diagnose":
+            diagnose(args.broker)
+            return 0
         if not existing:
             if args.mode == "verify":
                 raise RuntimeError("Kafka UI está detenido o falta instalarlo. Use --apply en CloudShell.")

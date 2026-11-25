@@ -71,6 +71,7 @@ def main():
     modes = parser.add_mutually_exclusive_group(required=True)
     modes.add_argument("--apply", action="store_true", help="levantar el panel y verificar los tópicos")
     modes.add_argument("--verify", action="store_true", help="consultar el panel instalado")
+    modes.add_argument("--diagnose", action="store_true", help="inspeccionar el contenedor y las respuestas HTTP")
     parser.add_argument("--lab-config", type=Path, default=Path.home() / "kafka_recovery.py")
     args = parser.parse_args()
     try:
@@ -80,7 +81,7 @@ def main():
         name, instance = find_host(clients, subnet, args.apply)
 
         source = Path(__file__).with_name("kafka_ui_host.py").read_text(encoding="utf-8")
-        mode = "apply" if args.apply else "verify"
+        mode = "apply" if args.apply else "diagnose" if args.diagnose else "verify"
         arguments = shlex.join([mode, f"{broker}:{PORT}"])
         print(f"Kafka UI · EC2 de {name} {instance} · {REGION}", flush=True)
         run_ssm({
