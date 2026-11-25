@@ -20,8 +20,8 @@ SERVICES = {
     "Productos": (8081, "/api/productos", "/api/productos", "200,401"),
     "Pedidos": (8082, "/api/pedidos", "/api/pedidos", "200,401,403"),
     "Carrito": (8083, "/api/carrito", "/api/carrito/me", "200,401"),
-    "Orden": (8084, "/api/orden", "/api/orden/health", "200"),
-    "Notificaciones": (8085, "/api/notificaciones", "/api/notificaciones/health", "200"),
+    "Orden": (8084, "/api/orden", "/api/orden/health", "200,401"),
+    "Notificaciones": (8085, "/api/notificaciones", "/api/notificaciones/health", "200,401"),
     "Reportes": (8086, "/api/reportes", "/api/reportes/health", "200"),
     "Pago": (8087, "/api/pagos", "/health", "200"),
     "Analytics": (8088, "/api/analytics", "/health", "200"),
@@ -65,12 +65,14 @@ def template():
         "DemoCidr": {"Type": "String", "Default": "", "AllowedPattern": r"^$|^[0-9.]+/32$"},
         "PublicAcme": {"Type": "String", "Default": "false", "AllowedValues": ["true", "false"]},
         "DataContainers": {"Type": "String", "Default": "false", "AllowedValues": ["true", "false"]},
+        "CorsProxy": {"Type": "String", "Default": "false", "AllowedValues": ["true", "false"]},
     }
     outputs = {
         "Frontend": {"Value": sub("${Endpoint}/ev3/", {"Endpoint": endpoint("FrontendApi")})},
         "Backend": {"Value": sub("${Endpoint}/ev3/api", {"Endpoint": endpoint("BackendApi")})},
         "WebpayReturn": {"Value": sub("${Endpoint}/ev3/checkout/webpay", {"Endpoint": endpoint("FrontendApi")})},
         "KafkaBootstrap": {"Value": sub("${KafkaNlb.DNSName}:9092")},
+        "BackendAlbDns": {"Value": attr("Alb", "DNSName")},
         "AnalyticsElasticIp": {"Condition": "Demo", "Value": ref("AnalyticsEip")},
     }
     resources = {}
@@ -150,6 +152,14 @@ def template():
         allow(f"PostgresFrom{name}", "PagoSg", 5432, source=f"{name}Sg", condition="WithData")
     for name in ("Productos", "Orden", "Notificaciones", "Reportes"):
         allow(f"RabbitFrom{name}", "NotificacionesSg", 5672, source=f"{name}Sg", condition="WithData")
+    allow("AlbProxyFromLink", "AlbSg", 8081, source="LinkSg", condition="WithData")
+    allow("AnalyticsProxyFromAlb", "AnalyticsSg", 18080, source="AlbSg", condition="WithData")
+    allow("AlbFromAnalyticsProxy", "AlbSg", 80, source="AnalyticsSg", condition="WithData")
+    add("CorsProxyTarget", "AWS::ElasticLoadBalancingV2::TargetGroup", condition="WithData", VpcId=ref("Vpc"),
+        TargetType="instance", Protocol="HTTP", Port=18080, Targets=[{"Id": ref("Analytics"), "Port": 18080}],
+        HealthCheckPath="/health")
+    add("CorsProxyListener", "AWS::ElasticLoadBalancingV2::Listener", condition="WithData", LoadBalancerArn=ref("Alb"),
+        Protocol="HTTP", Port=8081, DefaultActions=[{"Type": "forward", "TargetGroupArn": ref("CorsProxyTarget")}])
     add("AnalyticsEip", "AWS::EC2::EIP", condition="Demo", depends_on="IgwAttachment",
         Domain="vpc", InstanceId=ref("Analytics"))
     allow("DemoHttps", "AnalyticsSg", 18443, cidr=ref("DemoCidr"), condition="Demo")
@@ -167,9 +177,12 @@ def template():
         add(api, "AWS::ApiGatewayV2::Api", Name=sub(f"${{AWS::StackName}}-{prefix.lower()}"),
             ProtocolType="HTTP", **cors)
         integration = f"{prefix}Integration"
+        listener = ref(f"{prefix}Listener")
+        if prefix == "Backend":
+            listener = {"Fn::If": ["UseCorsProxy", ref("CorsProxyListener"), listener]}
         add(integration, "AWS::ApiGatewayV2::Integration", ApiId=ref(api), ConnectionType="VPC_LINK",
             ConnectionId=ref("VpcLink"), IntegrationType="HTTP_PROXY", IntegrationMethod="ANY",
-            IntegrationUri=ref(f"{prefix}Listener"), PayloadFormatVersion="1.0",
+            IntegrationUri=listener, PayloadFormatVersion="1.0",
             RequestParameters={"overwrite:path": "$request.path"})
         authorization = {"AuthorizationType": "NONE"}
         if prefix == "Backend":
@@ -185,6 +198,10 @@ def template():
             add(f"{prefix}{suffix}", "AWS::ApiGatewayV2::Route", ApiId=ref(api), RouteKey=key,
                 Target=sub(f"integrations/${{{integration}}}"), **authorization)
         route_resources = [f"{prefix}Proxy"] + (["FrontendRoot"] if prefix == "Frontend" else [])
+        if prefix == "Backend":
+            add("BackendPreflight", "AWS::ApiGatewayV2::Route", ApiId=ref(api), RouteKey="OPTIONS /api/{proxy+}",
+                Target=sub(f"integrations/${{{integration}}}"), AuthorizationType="NONE")
+            route_resources.append("BackendPreflight")
         add(f"{prefix}Stage", "AWS::ApiGatewayV2::Stage", depends_on=route_resources,
             ApiId=ref(api), StageName="ev3", AutoDeploy=True)
 
@@ -243,6 +260,8 @@ exec /docker-entrypoint.sh nginx -g 'daemon off;'
             "Conditions": {"Demo": {"Fn::Not": [{"Fn::Equals": [ref("DemoCidr"), ""]}]},
                            "Acme": {"Fn::And": [{"Condition": "Demo"}, {"Fn::Equals": [ref("PublicAcme"), "true"]}]},
                            "WithData": {"Fn::Equals": [ref("DataContainers"), "true"]},
+                           "UseCorsProxy": {"Fn::And": [{"Condition": "WithData"},
+                                                       {"Fn::Equals": [ref("CorsProxy"), "true"]}]},
                            "WithFrontend": {"Fn::Not": [{"Fn::Equals": [ref("FrontendImage"), ""]}]}}}
 
 
@@ -300,6 +319,8 @@ def deploy(args):
             parameters.append(f"FrontendImage={args.frontend_image}")
         if args.data_containers:
             parameters.append("DataContainers=true")
+        if args.cors_proxy:
+            parameters.append("CorsProxy=true")
         deploy_stack(path, flags, parameters)
     if not args.plan:
         stack = aws("cloudformation", "describe-stacks", "--stack-name", STACK)["Stacks"][0]
@@ -320,6 +341,7 @@ def main():
     parser.add_argument("--public-acme", action=argparse.BooleanOptionalAction,
                         help="open or close HTTP-01 certificate validation on Analytics")
     parser.add_argument("--data-containers", action="store_true", help="prepare private PostgreSQL and RabbitMQ hosts")
+    parser.add_argument("--cors-proxy", action="store_true", help="route the backend through the private CORS proxy")
     args = parser.parse_args()
     if args.render:
         print(json.dumps(template(), indent=2))
