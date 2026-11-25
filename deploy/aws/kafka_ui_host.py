@@ -1,4 +1,4 @@
-"""Private, read-only Kafka UI for the EV3 Productos host."""
+"""Private, read-only Kafka UI for an EV3 Kafka client host."""
 
 import argparse
 import json
@@ -77,6 +77,7 @@ def verify():
     opener = build_opener(ProxyHandler({}))
     request = Request(f"{URL}/topic", headers={"Accept": "application/json"})
     deadline = time.monotonic() + 95
+    last_result = "sin respuesta HTTP"
     while time.monotonic() < deadline:
         try:
             with opener.open(request, timeout=5) as response:
@@ -84,11 +85,14 @@ def verify():
             topics = {topic["name"] for topic in data}
             if topics:
                 break
-        except (URLError, OSError, KeyError, TypeError, ValueError):
-            pass
+            last_result = "HTTP 200 con una lista vacía de tópicos"
+        except HTTPError as error:
+            last_result = f"HTTP {error.code} en /topic"
+        except (OSError, KeyError, TypeError, ValueError) as error:
+            last_result = f"{type(getattr(error, 'reason', error)).__name__} en /topic"
         time.sleep(2)
     else:
-        raise RuntimeError(f"El panel no pudo listar tópicos del broker. Revise docker logs --tail 80 {NAME}.")
+        raise RuntimeError(f"El panel no pudo listar tópicos del broker ({last_result}). Ejecute --diagnose.")
 
     sockets = subprocess.check_output(["ss", "-ltnH", "sport", "=", f":{PORT}"], text=True, timeout=5)
     if {line.split()[3] for line in sockets.splitlines() if line.strip()} != {f"127.0.0.1:{PORT}"}:

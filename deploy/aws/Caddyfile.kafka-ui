@@ -1,0 +1,40 @@
+{
+	admin off
+	auto_https disable_redirects
+	default_sni {$KAFKA_UI_PUBLIC_IPV4}
+}
+
+http://{$KAFKA_UI_PUBLIC_IPV4}:80 {
+	bind {$KAFKA_UI_PRIVATE_IPV4}
+	respond 404
+}
+
+https://{$KAFKA_UI_PUBLIC_IPV4}:18443 {
+	bind {$KAFKA_UI_PRIVATE_IPV4}
+	tls {
+		issuer acme https://acme-v02.api.letsencrypt.org/directory {
+			profile shortlived
+			disable_tlsalpn_challenge
+		}
+	}
+
+	route {
+		@outside not remote_ip {$KAFKA_UI_CLIENT_IPV4}/32
+		respond @outside 403
+
+		basic_auth {
+			import kafka-ui.credentials
+		}
+
+		@mutation not method GET HEAD
+		respond @mutation 405
+
+		@management path /actuator* /v3/api-docs* /swagger-ui* /swagger-resources*
+		respond @management 404
+
+		header >Cache-Control "no-store"
+		reverse_proxy 127.0.0.1:18090 {
+			header_up -Authorization
+		}
+	}
+}
