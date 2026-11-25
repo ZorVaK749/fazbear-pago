@@ -16,7 +16,7 @@ from webpay import RolloutError, aws, run_ssm
 
 
 PROXY_DIR = "/opt/pedidos360-kafka-ui"
-PROXY_FILES = ("Caddyfile.kafka-ui", "compose.kafka-ui-proxy.yml")
+PROXY_FILES = ("Caddyfile.kafka-ui", "compose.kafka-ui-proxy.yml", "kafka_ui_proxy.sh")
 HOST_CAPACITY_COMMANDS = [
     "awk '/^MemAvailable:/ {print int($2 / 1024)}' /proc/meminfo",
     f"docker ps -a --quiet --filter label={shlex.quote(LABEL)} "

@@ -39,7 +39,7 @@ Si la verificación falla, `python3 deploy/aws/kafka_ui.py --diagnose` muestra e
 
 ## Abrir por la IPv4 pública de la EC2
 
-El Compose del proxy se ejecuta en la misma EC2 que Kafdrop. Antes de levantarlo, confirma que Kafdrop lista los tópicos en `127.0.0.1:18090`, que esa EC2 tiene IPv4 pública, que tiene Docker Compose y que los puertos 80 y 18443 están disponibles. Usa la IPv4 pública y privada de la misma instancia que muestra la consola de EC2.
+El proxy se ejecuta en la misma EC2 que Kafdrop. Antes de levantarlo, confirma que Kafdrop lista los tópicos en `127.0.0.1:18090`, que esa EC2 tiene IPv4 pública y que los puertos 80 y 18443 están disponibles. Usa la IPv4 pública y privada de la misma instancia que muestra la consola de EC2.
 
 Para mantener una dirección estable entre reinicios, usa la Elastic IP de esa EC2 si ya tiene una. En CloudShell, comprueba las direcciones en la región antes de decidir si necesitas asociar otra:
 
@@ -51,30 +51,17 @@ Si la EC2 tiene solo una IPv4 pública dinámica, asociar una Elastic IP reempla
 
 En el grupo de seguridad de la EC2 del panel, habilita TCP/18443 solo desde la IPv4 pública del equipo de la presentación con máscara `/32`. Caddy usa TCP/80 para que Let's Encrypt valide el control de la IP y emita un certificado de duración corta. Durante la emisión, el puerto 80 debe ser accesible desde Internet. El proxy HTTP solo atiende el desafío ACME y redirige al equipo autorizado a HTTPS. Después de emitir el certificado, puedes restringir TCP/80 a la misma IPv4 de la demo o cerrar ese puerto y abrir directamente HTTPS. Una renovación futura vuelve a necesitar la validación.
 
-Al terminar con éxito, `kafka_ui.py --apply` copia los archivos del proxy a `/opt/pedidos360-kafka-ui` de la misma EC2. En la sesión de esa EC2, exporta las tres IPv4 e introduce una contraseña de demo en el prompt. Caddy lee su hash de un archivo de la EC2 con permisos `0600`.
+Al terminar con éxito, `kafka_ui.py --apply` copia los archivos del proxy a `/opt/pedidos360-kafka-ui` de la misma EC2. Ejecuta lo siguiente en Session Manager de esa EC2. El script usa Docker e introduce la contraseña de demo en un prompt oculto. Caddy lee el hash de un archivo de la EC2 con permisos `0600`.
 
 ```bash
 cd /opt/pedidos360-kafka-ui
-export KAFKA_UI_PUBLIC_IPV4=IPv4_PUBLICA_EC2
-export KAFKA_UI_PRIVATE_IPV4=IPv4_PRIVADA_EC2
-export KAFKA_UI_CLIENT_IPV4=IPv4_PUBLICA_DEL_NAVEGADOR
-caddy_image='caddy:2.11.9-alpine@sha256:003a97808e781aa9f7e75cc2f43d34d461099031faf5e20faefb9f61126836f0'
-read -rsp 'Contraseña de demo: ' kafka_ui_password
-printf '\n'
-KAFKA_UI_PASSWORD_HASH=$(printf '%s\n' "$kafka_ui_password" | sudo docker run --rm -i "$caddy_image" caddy hash-password --bcrypt-cost 10)
-unset kafka_ui_password
-if test -n "$KAFKA_UI_PASSWORD_HASH"; then
-  sudo install -m 0600 /dev/null kafka-ui.credentials &&
-    printf 'demo %s\n' "$KAFKA_UI_PASSWORD_HASH" | sudo tee kafka-ui.credentials >/dev/null &&
-    sudo --preserve-env=KAFKA_UI_PUBLIC_IPV4,KAFKA_UI_PRIVATE_IPV4,KAFKA_UI_CLIENT_IPV4 \
-      docker compose -f compose.kafka-ui-proxy.yml up -d
-fi
-unset KAFKA_UI_PASSWORD_HASH
+sudo bash kafka_ui_proxy.sh IPv4_PUBLICA_EC2 IPv4_PRIVADA_EC2 IPv4_PUBLICA_DEL_NAVEGADOR
+sudo docker logs --tail 40 pedidos360-ev3-kafka-ui-proxy
 ```
 
 Abre `http://IPv4_PUBLICA_EC2:80/` en Firefox para que redirija a `https://IPv4_PUBLICA_EC2:18443/`. Usa el usuario `demo`. Comprueba que el certificado coincide con esa IPv4, que el navegador pide autenticación y que después aparecen los tópicos. Una nueva IPv4 pública requiere actualizar el proxy y emitir un certificado para la nueva IP.
 
-Caddy restringe el acceso a la IPv4 indicada, exige una contraseña, reenvía a Kafdrop las consultas GET y HEAD, y filtra las rutas de administración. El puerto de Kafdrop se mantiene en loopback. Para retirar el acceso tras la demo, ejecuta `sudo docker stop pedidos360-ev3-kafka-ui-proxy-proxy-1` y revoca las reglas que agregaste al grupo de seguridad.
+Caddy restringe el acceso a la IPv4 indicada, exige una contraseña, reenvía a Kafdrop las consultas GET y HEAD, y filtra las rutas de administración. El puerto de Kafdrop se mantiene en loopback. Para retirar el acceso tras la demo, ejecuta `sudo docker stop pedidos360-ev3-kafka-ui-proxy` y revoca las reglas que agregaste al grupo de seguridad.
 
 ## Abrir por Session Manager
 
