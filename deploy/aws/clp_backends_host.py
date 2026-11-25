@@ -21,6 +21,8 @@ RELEASE = {
               "ghcr.io/zorvak749/fazbear-orden@sha256:29c351c0208ee67fff3c496b39305af67a22d6769fcb3574899a712918204f87"),
     "notificaciones": (8085, "/api/notificaciones/health",
                         "ghcr.io/zorvak749/fazbear-notificaciones@sha256:7338142218d895e20fd0710cea5e229e1de7b4ba5e03504032103a02cc7e72f8"),
+    "pedidos": (8082, "/api/pedidos",
+                "ghcr.io/zorvak749/fazbears-pedidos@sha256:e425eb1c1bda1f078e478a146eb94eb2aa478227bac888e280240201e9f00281"),
 }
 MODES = ("dry-run", "status", "apply", "verify", "recover")
 HEALTHY_HTTP = {200, 401, 403}
@@ -77,7 +79,7 @@ class Backend(Host):
                 or config["WorkingDir"] != "/app" or config.get("Cmd")):
             raise RolloutError("El contenedor usa un arranque o configuración Docker que requiere revisión.")
         overrides = {}
-        if self.name in {"carrito", "orden"}:
+        if self.name in {"carrito", "orden", "pedidos"}:
             storage, persistent = datasource(current, self.name)
             if not persistent or (self.name == "orden" and storage != "PostgreSQL"):
                 raise RolloutError(f"El origen de datos de {self.name} requiere revisión: {storage}.")

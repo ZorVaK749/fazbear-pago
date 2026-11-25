@@ -30,7 +30,8 @@ class ClpBackendsTest(unittest.TestCase):
                 patch.object(cli, "send") as send, patch.object(cli, "wait_for_target") as wait:
             cli.execute("apply")
         self.assertEqual([call.args[:2] for call in send.call_args_list],
-                         [(name, mode) for mode in ("dry-run", "apply") for name in host.RELEASE])
+                         [(name, mode) for mode in ("dry-run", "apply")
+                          for name in ("carrito", "orden", "notificaciones")])
         self.assertEqual([call.kwargs["port"] for call in wait.call_args_list], [8083, 8084, 8085])
 
     def test_unhealthy_last_backend_prevents_every_cut(self):
@@ -73,6 +74,24 @@ class ClpBackendsTest(unittest.TestCase):
             with self.assertRaisesRegex(host.RolloutError, "H2 en memoria"):
                 backend.apply()
         docker.assert_not_called()
+
+    def test_pedidos_requires_digest_and_preserves_its_persistent_storage(self):
+        with patch.object(cli, "aws") as aws:
+            with self.assertRaisesRegex(host.RolloutError, "Pedidos requiere --image"):
+                cli.execute("apply", "pedidos")
+        aws.assert_not_called()
+
+        backend = host.Backend("pedidos", "172.31.0.10", "172.31.15.227")
+        _, current = self.cart_fixture()
+        current["Config"]["Image"] = backend.image
+        current["Mounts"][0]["Destination"] = "/var/lib/fazbear/pedidos"
+        current["HostConfig"]["PortBindings"] = {"8082/tcp": [{"HostIp": backend.address, "HostPort": "8082"}]}
+        with patch.object(backend, "current", return_value=current), \
+                patch.object(backend, "state", return_value={}), \
+                patch.object(host, "http_status", return_value=401):
+            _, candidate = backend.preflight()
+            self.assertEqual(candidate["HostConfig"], current["HostConfig"])
+            self.assertEqual(candidate["Env"], current["Config"]["Env"])
 
     def test_verification_is_resumable_and_preserves_latest_candidate(self):
         backend = host.Backend("orden", "172.31.5.22", "172.31.15.227")

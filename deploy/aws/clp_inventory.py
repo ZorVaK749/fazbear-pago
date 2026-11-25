@@ -14,6 +14,7 @@ from webpay import ACCOUNT, RolloutError, aws, run_ssm
 SERVICES = {
     "productos": ("i-0bc8e0a99f79ccac6", "fazbears-productos", 8081),
     "carrito": ("i-0c29438f2236c5b39", "fazbear-carrito", 8083),
+    "pedidos": ("i-0ea3f9a91d1384db9", "fazbears-pedidos", 8082),
     "orden": ("i-0affb4cde24db3e39", "fazbear-orden", 8084),
     "notificaciones": ("i-0ab7a0bdce7b6cb9c", "fazbear-notificaciones", 8085),
     "analytics": ("i-049081f7c46b5aba3", "fazbear-analytics-recommendations", 8088),

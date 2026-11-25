@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Actualiza Carrito, Orden o Notificaciones en EC2 por digest."""
+"""Actualiza servicios ya instalados en EC2 por digest."""
 
 import argparse
 from ipaddress import IPv4Address
@@ -24,6 +24,8 @@ def send(name, mode, address, catalog, image=None):
 
 
 def execute(mode, selected=None, image=None):
+    if selected == "pedidos" and mode in {"dry-run", "apply", "verify"} and image is None:
+        raise RolloutError("Pedidos requiere --image con el digest publicado.")
     if image is not None:
         if selected is None:
             raise RolloutError("--image requiere --service.")
@@ -32,7 +34,7 @@ def execute(mode, selected=None, image=None):
         raise RolloutError(f"La sesión AWS debe corresponder a la cuenta {ACCOUNT}.")
     product_instance, _, product_port = SERVICES["productos"]
     catalog = private_ip(product_instance)
-    names = (selected,) if selected else tuple(RELEASE)
+    names = (selected,) if selected else tuple(name for name in RELEASE if name != "pedidos")
     targets = []
     if mode in {"dry-run", "apply"}:
         arn, target, _ = resolve_target(None, instance=product_instance, port=product_port)

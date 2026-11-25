@@ -42,7 +42,7 @@ def datasource(container, service):
         return "requiere revisión por configuración externa", False
     url = env.get("SPRING_DATASOURCE_URL") or env.get(f"{service.upper()}_DB_URL", "")
     profiles = env.get("SPRING_PROFILES_ACTIVE", "").split(",")
-    if not url and service in {"productos", "carrito"} and profiles == ["ev3-aws"]:
+    if not url and service in {"productos", "carrito", "pedidos"} and profiles == ["ev3-aws"]:
         url = f"jdbc:h2:file:/var/lib/fazbear/{service}/{service}db"
     if url.startswith("jdbc:h2:mem:"):
         return "H2 en memoria", False
