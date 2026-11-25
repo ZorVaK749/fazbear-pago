@@ -6,6 +6,8 @@
 
 http://{$KAFKA_UI_PUBLIC_IPV4}:80 {
 	bind {$KAFKA_UI_PRIVATE_IPV4}
+	@demo remote_ip {$KAFKA_UI_CLIENT_IPV4}/32
+	redir @demo https://{$KAFKA_UI_PUBLIC_IPV4}:18443{uri} 302
 	respond 404
 }
 

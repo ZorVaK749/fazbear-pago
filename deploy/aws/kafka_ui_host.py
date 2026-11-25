@@ -1,6 +1,7 @@
 """Private, read-only Kafka UI for an EV3 Kafka client host."""
 
 import argparse
+import ipaddress
 import json
 from pathlib import Path
 import re
@@ -83,6 +84,24 @@ def launch(broker, environment, existing):
     subprocess.run([*args, IMAGE], check=True, timeout=150)
 
 
+def panel_is_private(addresses):
+    if not addresses:
+        return False
+    for address in addresses:
+        host, _, port = address.rpartition(":")
+        if port != str(PORT):
+            return False
+        try:
+            address_ip = ipaddress.ip_address(host.strip("[]"))
+        except ValueError:
+            return False
+        # Tomcat may represent the IPv4 loopback socket as an IPv4-mapped IPv6 address.
+        ipv4 = getattr(address_ip, "ipv4_mapped", None) or address_ip
+        if ipv4 != ipaddress.IPv4Address("127.0.0.1"):
+            return False
+    return True
+
+
 def verify():
     opener = build_opener(ProxyHandler({}))
     request = Request(f"{URL}/topic", headers={"Accept": "application/json"})
@@ -105,8 +124,9 @@ def verify():
         raise RuntimeError(f"El panel no pudo listar tópicos del broker ({last_result}). Ejecute --diagnose.")
 
     sockets = subprocess.check_output(["ss", "-ltnH", "sport", "=", f":{PORT}"], text=True, timeout=5)
-    if {line.split()[3] for line in sockets.splitlines() if line.strip()} != {f"127.0.0.1:{PORT}"}:
-        raise RuntimeError("La escucha del panel debe estar limitada a 127.0.0.1.")
+    addresses = [line.split()[3] for line in sockets.splitlines() if line.strip()]
+    if not panel_is_private(addresses):
+        raise RuntimeError(f"La escucha del panel debe estar limitada a 127.0.0.1. Observada: {addresses}")
     print(f"Kafka UI de solo lectura · {URL} · {len(topics)} tópicos listados")
     for topic in TOPICS:
         status = "visible" if topic in topics else "ausente en la consulta"

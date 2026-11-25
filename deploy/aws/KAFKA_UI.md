@@ -49,7 +49,7 @@ aws ec2 describe-addresses --region us-east-1 --query 'Addresses[].{IPv4:PublicI
 
 Si la EC2 tiene solo una IPv4 pública dinámica, asociar una Elastic IP reemplaza esa dirección. Revisa primero qué integraciones usan la IP pública actual. Una Elastic IP tiene costo y ocupa cuota de la región. La configuración también funciona con la IPv4 pública dinámica, con un certificado nuevo si cambia.
 
-En el grupo de seguridad de la EC2 del panel, habilita TCP/18443 solo desde la IPv4 pública del equipo de la presentación con máscara `/32`. Caddy usa TCP/80 para que Let's Encrypt valide el control de la IP y emita un certificado de duración corta. Durante esa validación el puerto 80 tiene que ser accesible desde Internet y su sitio solo atiende el desafío ACME. Retira esa regla temporal después de emitir el certificado si el panel se usará solo en la demo. Una renovación futura vuelve a necesitar la validación.
+En el grupo de seguridad de la EC2 del panel, habilita TCP/18443 solo desde la IPv4 pública del equipo de la presentación con máscara `/32`. Caddy usa TCP/80 para que Let's Encrypt valide el control de la IP y emita un certificado de duración corta. Durante la emisión, el puerto 80 debe ser accesible desde Internet. El proxy HTTP solo atiende el desafío ACME y redirige al equipo autorizado a HTTPS. Después de emitir el certificado, puedes restringir TCP/80 a la misma IPv4 de la demo o cerrar ese puerto y abrir directamente HTTPS. Una renovación futura vuelve a necesitar la validación.
 
 Al terminar con éxito, `kafka_ui.py --apply` copia los archivos del proxy a `/opt/pedidos360-kafka-ui` de la misma EC2. En la sesión de esa EC2, exporta las tres IPv4 e introduce una contraseña de demo en el prompt. Caddy lee su hash de un archivo de la EC2 con permisos `0600`.
 
@@ -72,7 +72,7 @@ fi
 unset KAFKA_UI_PASSWORD_HASH
 ```
 
-Abre `https://IPv4_PUBLICA_EC2:18443/` en Firefox y usa el usuario `demo`. Comprueba que el certificado coincide con esa IPv4, que el navegador pide autenticación y que después aparecen los tópicos. Una nueva IPv4 pública requiere actualizar el proxy y emitir un certificado para la nueva IP.
+Abre `http://IPv4_PUBLICA_EC2:80/` en Firefox para que redirija a `https://IPv4_PUBLICA_EC2:18443/`. Usa el usuario `demo`. Comprueba que el certificado coincide con esa IPv4, que el navegador pide autenticación y que después aparecen los tópicos. Una nueva IPv4 pública requiere actualizar el proxy y emitir un certificado para la nueva IP.
 
 Caddy restringe el acceso a la IPv4 indicada, exige una contraseña, reenvía a Kafdrop las consultas GET y HEAD, y filtra las rutas de administración. El puerto de Kafdrop se mantiene en loopback. Para retirar el acceso tras la demo, ejecuta `sudo docker stop pedidos360-ev3-kafka-ui-proxy-proxy-1` y revoca las reglas que agregaste al grupo de seguridad.
 
