@@ -19,6 +19,7 @@ API = "p5gsy16utd"
 STAGE = "ev3"
 DEFAULT = "$default"
 GREEDY_ROUTE = "ANY /{proxy+}"
+PROXY_ROUTES = ("GET /", GREEDY_ROUTE)
 SHADOWING_TARGET = "integrations/zout20o"
 BACKUP = Path.home() / "pedidos360-frontend-default.json"
 CREATE_STAGE_KEYS = {
@@ -84,10 +85,13 @@ def missing_routes(routes, target):
     return missing
 
 
-def verify_named_stage(retired=False):
+def verify_named_stage(retired=False, *, require_explicit=False):
     routes, stages, target = inventory()
     missing = missing_routes(routes, target)
-    if not stages.get(STAGE, {}).get("DeploymentId") or (missing and (retired or DEFAULT not in routes)):
+    proxy_ready = all(routes.get(key, {}).get("Target") == target
+                      and routes[key].get("AuthorizationType") == "NONE" for key in PROXY_ROUTES)
+    if not stages.get(STAGE, {}).get("DeploymentId") or (
+            missing and (require_explicit or retired or (DEFAULT not in routes and not proxy_ready))):
         raise RolloutError("El Gateway todavía no tiene un despliegue ev3 con las rutas necesarias.")
     if retired and (DEFAULT in routes or DEFAULT in stages):
         raise RolloutError("API Gateway todavía muestra la ruta o el stage $default.")
@@ -156,7 +160,7 @@ def read_backup(path, target):
 
 
 def retire_default(path):
-    verify_named_stage()
+    verify_named_stage(require_explicit=True)
     routes, stages, target = inventory()
     route, stage = routes.get(DEFAULT), stages.get(DEFAULT)
     if not route and not stage:
@@ -205,6 +209,8 @@ def restore_default(path):
 
 def verify_proxy_checkout():
     for prefix in ("", "/" + STAGE):
+        if "<app-root" not in fetch(prefix + "/"):
+            raise RolloutError(f"{prefix}/ no sirve la página de inicio de Angular.")
         verify_checkout(prefix)
         verify_post_return(prefix)
 
@@ -219,6 +225,13 @@ def verify_default_proxy():
         if not valid:
             raise RolloutError(f"{path} no llega a Angular mediante el proxy general.")
     verify_proxy_checkout()
+
+
+def save_route_backup(path, routes, stages, target):
+    backup = {"account": ACCOUNT, "api": API, "target": target, "routes": routes, "stages": stages}
+    with open(path, "x", encoding="utf-8", opener=lambda name, flags: os.open(name, flags, 0o600)) as stream:
+        json.dump(backup, stream, indent=2)
+    print(f"Respaldo de rutas del frontend: {path}", flush=True)
 
 
 def keep_default_only(path):
@@ -242,10 +255,7 @@ def keep_default_only(path):
         return
 
     original_stages = {name: stages[name] for name in stage_names}
-    backup = {"account": ACCOUNT, "api": API, "target": target, "routes": explicit, "stages": original_stages}
-    with open(path, "x", encoding="utf-8", opener=lambda name, flags: os.open(name, flags, 0o600)) as stream:
-        json.dump(backup, stream, indent=2)
-    print(f"Respaldo de rutas del frontend: {path}", flush=True)
+    save_route_backup(path, explicit, original_stages, target)
 
     manual = [name for name in stage_names if not stages[name].get("AutoDeploy")]
     previous_deployments = {name: stage["DeploymentId"] for name, stage in original_stages.items()}
@@ -300,6 +310,80 @@ def keep_default_only(path):
     print("Solo queda la ruta $default. Checkout y retorno POST comprobados en ambos stages.")
 
 
+def use_greedy_proxy(path):
+    routes, stages, target = inventory()
+    expected = set(PROXY_ROUTES)
+    stage_names = (DEFAULT, STAGE)
+    if any(not stages.get(name, {}).get("DeploymentId") for name in stage_names):
+        raise RolloutError("Los stages $default y ev3 deben estar activos.")
+    if not set(routes) <= expected | {DEFAULT}:
+        raise RolloutError("El Gateway contiene otras rutas. Revise el inventario antes de cambiar el proxy.")
+    for key, route in routes.items():
+        if route.get("Target") != target or route.get("AuthorizationType") != "NONE":
+            raise RolloutError(f"{key} difiere de la integración pública verificada.")
+
+    verify_default_proxy()
+    if set(routes) == expected:
+        print("El proxy y la raíz ya están verificados en ambos stages.")
+        return
+    default = routes.get(DEFAULT)
+    if not default or not default.get("RouteId") or default.get("ApiGatewayManaged"):
+        raise RolloutError("Se requiere una ruta $default administrable para conservar el acceso durante el cambio.")
+
+    original_stages = {name: stages[name] for name in stage_names}
+    save_route_backup(path, routes, original_stages, target)
+    manual = [name for name in stage_names if not stages[name].get("AutoDeploy")]
+    missing = [key for key in PROXY_ROUTES if key not in routes]
+    created_routes = {}
+
+    def publish():
+        for name in manual:
+            aws("apigatewayv2", "create-deployment", "--api-id", API, "--stage-name", name)
+
+    def check(keys, previous_stages):
+        current, deployments, current_target = inventory()
+        if (set(current) != keys or current_target != target
+                or any(route.get("Target") != target or route.get("AuthorizationType") != "NONE"
+                       for route in current.values())):
+            raise RolloutError("El Gateway todavía no muestra las rutas esperadas del proxy.")
+        for name, previous in previous_stages.items():
+            deployment = deployments.get(name, {}).get("DeploymentId")
+            if not deployment or deployment == previous["DeploymentId"]:
+                raise RolloutError(f"El stage {name} aún no publicó la configuración nueva.")
+        verify_default_proxy()
+
+    try:
+        for key in missing:
+            created = aws("apigatewayv2", "create-route", "--api-id", API, "--route-key", key,
+                          "--target", target, "--authorization-type", "NONE")
+            created_routes[key] = created["RouteId"]
+        if missing:
+            publish()
+        wait_for(lambda: check(expected | {DEFAULT}, original_stages if missing else {}))
+        _, intermediate, _ = inventory()
+        aws("apigatewayv2", "delete-route", "--api-id", API, "--route-id", default["RouteId"])
+        publish()
+        wait_for(lambda: check(expected, {name: intermediate[name] for name in stage_names}))
+    except (RolloutError, KeyError) as error:
+        try:
+            current, _, _ = inventory()
+            if DEFAULT not in current:
+                payload = {field: default[field] for field in CREATE_ROUTE_KEYS if field in default}
+                aws("apigatewayv2", "create-route", input_json={"ApiId": API, **payload})
+            for key, route_id in created_routes.items():
+                if current.get(key, {}).get("RouteId") == route_id:
+                    aws("apigatewayv2", "delete-route", "--api-id", API, "--route-id", route_id)
+            for name in manual:
+                aws("apigatewayv2", "update-stage", "--api-id", API, "--stage-name", name,
+                    "--deployment-id", original_stages[name]["DeploymentId"])
+            wait_for(verify_default_proxy)
+        except RolloutError as recovery_error:
+            raise RolloutError(f"{error} La recuperación quedó incompleta. Respaldo: {path}. {recovery_error}") from None
+        raise RolloutError(f"{error} Rutas anteriores restauradas. Respaldo: {path}.") from None
+
+    print("Rutas GET / y ANY /{proxy+} verificadas. Checkout y retorno POST comprobados en ambos stages.")
+
+
 def execute(mode, backup=BACKUP):
     if mode == "verify":
         verify_named_stage()
@@ -310,9 +394,9 @@ def execute(mode, backup=BACKUP):
     if mode == "restore-default":
         restore_default(backup)
         return
-    if mode == "keep-default-only":
+    if mode in {"keep-default-only", "use-greedy-proxy"}:
         path = backup if backup != BACKUP else BACKUP.with_name(f"pedidos360-frontend-routes-{time.time_ns()}.json")
-        keep_default_only(path)
+        (keep_default_only if mode == "keep-default-only" else use_greedy_proxy)(path)
         return
     routes, stages, target = inventory()
     missing = missing_routes(routes, target)
@@ -334,9 +418,10 @@ def execute(mode, backup=BACKUP):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     group = parser.add_mutually_exclusive_group(required=True)
-    for mode in ("dry-run", "prepare", "verify", "retire-default", "restore-default", "keep-default-only"):
+    for mode in ("dry-run", "prepare", "verify", "retire-default", "restore-default", "keep-default-only",
+                 "use-greedy-proxy"):
         group.add_argument("--" + mode, dest="mode", action="store_const", const=mode)
-    parser.add_argument("--backup", type=Path, default=BACKUP, help="Archivo de respaldo privado de $default")
+    parser.add_argument("--backup", type=Path, default=BACKUP, help="Archivo de respaldo privado del Gateway")
     args = parser.parse_args()
     try:
         execute(args.mode, args.backup)

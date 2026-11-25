@@ -186,3 +186,60 @@ class FrontendGatewayTests(unittest.TestCase):
                 redirect_stdout(io.StringIO()):
             gateway.execute("verify")
             post.assert_called_once_with("/ev3")
+
+    def test_greedy_proxy_uses_existing_target_and_verifies_before_retiring_default(self):
+        original = {"$default": self.default_route}
+        proxy = {key: {**self.default_route, "RouteId": str(index), "RouteKey": key}
+                 for index, key in enumerate(gateway.PROXY_ROUTES)}
+        intermediate = {**original, **proxy}
+        before = {name: {"AutoDeploy": True, "DeploymentId": "old"} for name in ("$default", "ev3")}
+        added = {name: {**stage, "DeploymentId": "with-proxy"} for name, stage in before.items()}
+        final = {name: {**stage, "DeploymentId": "proxy-only"} for name, stage in before.items()}
+        log = []
+
+        def change(*args, **kwargs):
+            log.append((args[1], args[5]))
+            if args[1] == "create-route":
+                self.assertEqual(args[6:], ("--target", self.target, "--authorization-type", "NONE"))
+                return {"RouteId": proxy[args[5]]["RouteId"]}
+
+        with TemporaryDirectory() as directory, \
+                patch.object(gateway, "inventory", side_effect=[
+                    (original, before, self.target), (intermediate, added, self.target),
+                    (intermediate, added, self.target), (proxy, final, self.target)]), \
+                patch.object(gateway, "aws", side_effect=change), \
+                patch.object(gateway, "verify_default_proxy", side_effect=lambda: log.append("verify")), \
+                redirect_stdout(io.StringIO()):
+            path = Path(directory) / "proxy.json"
+            gateway.execute("use-greedy-proxy", path)
+            self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["routes"], original)
+
+        self.assertEqual(log, ["verify", ("create-route", "GET /"), ("create-route", gateway.GREEDY_ROUTE),
+                               "verify", ("delete-route", "legacy1"), "verify"])
+
+    def test_greedy_proxy_reverts_new_routes_when_probe_fails(self):
+        original = {"$default": self.default_route}
+        proxy = {key: {**self.default_route, "RouteId": route_id, "RouteKey": key}
+                 for key, route_id in zip(gateway.PROXY_ROUTES, ("root", "greedy"))}
+        stages = {name: {"AutoDeploy": True, "DeploymentId": "active"} for name in ("$default", "ev3")}
+        with TemporaryDirectory() as directory, \
+                patch.object(gateway, "inventory", side_effect=[
+                    (original, stages, self.target), ({**original, **proxy}, stages, self.target)]), \
+                patch.object(gateway, "verify_default_proxy"), \
+                patch.object(gateway, "wait_for", side_effect=[gateway.RolloutError("POST 503"), None]), \
+                patch.object(gateway, "aws", side_effect=[{"RouteId": "root"}, {"RouteId": "greedy"}, {}, {}]) as aws, \
+                redirect_stdout(io.StringIO()):
+            with self.assertRaisesRegex(gateway.RolloutError, "Rutas anteriores restauradas"):
+                gateway.execute("use-greedy-proxy", Path(directory) / "proxy.json")
+        self.assertEqual([call.args[-1] for call in aws.call_args_list if call.args[1] == "delete-route"],
+                         ["root", "greedy"])
+
+    def test_verify_accepts_greedy_proxy_with_the_root_route(self):
+        proxy = {key: {**self.default_route, "RouteKey": key} for key in gateway.PROXY_ROUTES}
+        with patch.object(gateway, "inventory", return_value=(
+                    proxy, {"ev3": {"DeploymentId": "active"}}, self.target)), \
+                patch.object(gateway, "fetch", return_value="<app-root></app-root><script>'/ev3/'</script>"), \
+                patch.object(gateway, "verify_checkout"), patch.object(gateway, "verify_post_return") as post, \
+                redirect_stdout(io.StringIO()):
+            gateway.execute("verify")
+            post.assert_called_once_with("/ev3")
