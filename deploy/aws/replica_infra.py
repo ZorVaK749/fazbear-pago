@@ -170,7 +170,8 @@ def template():
                 AuthorizerType="JWT", IdentitySource=["$request.header.Authorization"],
                 JwtConfiguration={"Issuer": f"https://login.microsoftonline.com/{TENANT}/v2.0",
                                   "Audience": [AUDIENCE, f"api://{AUDIENCE}"]})
-            authorization = {"AuthorizationType": "JWT", "AuthorizerId": ref("Entra")}
+            authorization = {"AuthorizationType": "JWT", "AuthorizerId": ref("Entra"),
+                             "AuthorizationScopes": ["access_as_user"]}
         for suffix, key in (("Root", "GET /"), ("Proxy", "ANY /{proxy+}")) if prefix == "Frontend" else (
             ("Proxy", "ANY /api/{proxy+}"),
         ):
