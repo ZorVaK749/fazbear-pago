@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import secrets
 import subprocess
 import sys
@@ -157,6 +158,42 @@ def rabbit(host, credentials):
     print("RabbitMQ listo.", flush=True)
 
 
+def cors_proxy(host, backend_dns, frontend_origin):
+    if not re.fullmatch(r"[A-Za-z0-9.-]+\.elb\.us-east-1\.amazonaws\.com", backend_dns):
+        raise RuntimeError("El DNS del balanceador de la réplica no tiene el formato esperado.")
+    nginx = ROOT / "cors-proxy.conf"
+    nginx.write_text(f"""
+server {{
+    listen 8080;
+    access_log off;
+    resolver 127.0.0.11 ipv6=off valid=30s;
+    location = /health {{ return 200 'UP'; }}
+    location /api/ {{
+        if ($request_method = OPTIONS) {{ return 204; }}
+        proxy_set_header Origin "";
+        proxy_set_header Authorization $http_authorization;
+        proxy_set_header X-Service-Key "";
+        set $backend http://{backend_dns};
+        proxy_pass $backend$request_uri;
+    }}
+    location / {{ return 404; }}
+}}
+""", encoding="utf-8")
+    network = "ev3-replica-cors"
+    if not ready_command("docker", "network", "inspect", network):
+        checked(["docker", "network", "create", network], "Red Docker del proxy CORS")
+    start_container("ev3-replica-cors-proxy", "nginx:1.28-alpine", {"REPLICA_BACKEND_DNS": backend_dns},
+                    ["--network", network, "--memory", "96m", "-p", f"{host}:18080:8080",
+                     "-v", f"{nginx}:/etc/nginx/conf.d/default.conf:ro"])
+    wait_until(lambda: ready_command("curl", "-fsS", "--max-time", "5", f"http://{host}:18080/health"), "proxy CORS")
+    options = ["curl", "-sS", "--max-time", "10", "-o", "/dev/null", "-w", "%{http_code}"]
+    code = checked([*options, "-H", f"Origin: {frontend_origin}",
+                    f"http://{host}:18080/api/productos"], "Prueba de conexión del proxy a Productos").strip()
+    if code not in ("200", "401"):
+        raise RuntimeError(f"El proxy devolvió HTTP {code} al consultar el catálogo en el ALB.")
+    print(f"Proxy CORS privado listo. Productos responde HTTP {code} sin token en el tramo privado.", flush=True)
+
+
 def app(config, credentials):
     name = config["name"]
     db = name.lower()
@@ -179,20 +216,24 @@ def app(config, credentials):
     url = f"http://{config['host']}:{config['port']}{config['health']}"
     opener = build_opener(ProxyHandler({}))
 
+    last_code = None
+
     def healthy():
+        nonlocal last_code
         try:
             with opener.open(url, timeout=4) as response:
-                return response.status in config["allowed"]
+                last_code = response.status
         except HTTPError as error:
-            return error.code in config["allowed"]
+            last_code = error.code
         except (URLError, TimeoutError):
-            return False
+            last_code = None
+        return last_code in config["allowed"]
 
     try:
         wait_until(healthy, name)
     except RuntimeError as error:
-        raise RuntimeError(f"{error} Revisar sudo docker logs --tail 50 {container_name} en su EC2.") from error
-    print(f"{name} responde en el puerto {config['port']}.", flush=True)
+        raise RuntimeError(f"{error} Ultimo HTTP: {last_code}. Revisar sudo docker logs --tail 50 {container_name} en su EC2.") from error
+    print(f"{name} · HTTP {last_code} en el puerto {config['port']}.", flush=True)
 
 
 def host_operation(config):
@@ -202,11 +243,14 @@ def host_operation(config):
     with (ROOT / "deploy.lock").open("w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         wait_until(lambda: ready_command("systemctl", "is-active", "--quiet", "docker"), "Docker")
+        operation = config.get("operation", "app")
+        if operation == "cors_proxy":
+            cors_proxy(config["host"], config["backend_dns"], config["frontend_origin"])
+            return
         output = checked(["aws", "ssm", "get-parameter", "--region", config["region"], "--name", config["parameter"],
                           "--with-decryption", "--query", "Parameter.Value", "--output", "text"],
                          "Lectura de configuración cifrada por LabInstanceProfile")
         credentials = json.loads(output)
-        operation = config.get("operation", "app")
         if operation == "app":
             app(config, credentials)
         elif operation == "postgres":
@@ -318,6 +362,10 @@ def launch(account):
                       ("RabbitMQ", hosts["Notificaciones"], {**configs["Notificaciones"], "operation": "rabbit"})], payload)
     deploy_many(aws, [(name, hosts[name], configs[name]) for name in SERVICES], payload)
     verify_targets(aws, STACK, hosts)
+    proxy_config = {"operation": "cors_proxy", "host": outputs["AnalyticsIp"], "backend_dns": outputs["BackendAlbDns"],
+                    "frontend_origin": outputs["Frontend"].removesuffix("/ev3/")}
+    deploy_many(aws, [("Proxy CORS", hosts["Analytics"], proxy_config)], payload)
+    verify_targets(aws, STACK, {"CorsProxy": hosts["Analytics"]})
 
 
 def main():
