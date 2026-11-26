@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import re
 import secrets
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -22,7 +23,7 @@ from urllib.request import ProxyHandler, build_opener
 REGISTRY = "ghcr.io/zorvak749/"
 IMAGES = {
     "Productos": ("fazbears-productos", "b6738b92eb0372d30782154e2c709b3f162c2afe87d03a46be84a42ef1ddee37"),
-    "Pedidos": ("fazbears-pedidos", "e425eb1c1bda1f078e478a146eb94eb2aa478227bac888e280240201e9f00281"),
+    "Pedidos": ("fazbears-pedidos", "7dc03fc8623a4f51305b1349defb89b3b1ce3b9d8e027e01b008611a3305747c"),
     "Carrito": ("fazbear-carrito", "149b0394ccb03a7db9565bd760ef8406041ae398dd2cb30feb57b0bf1322cc66"),
     "Orden": ("fazbear-orden", "29c351c0208ee67fff3c496b39305af67a22d6769fcb3574899a712918204f87"),
     "Notificaciones": ("fazbear-notificaciones", "7338142218d895e20fd0710cea5e229e1de7b4ba5e03504032103a02cc7e72f8"),
@@ -39,6 +40,7 @@ CONFIG_LABEL = "cl.pedidos360.replica.config"
 ROOT = Path("/etc/pedidos360-replica")
 WEBPAY_TEST_COMMERCE = "597055555532"
 WEBPAY_MODE = "SIMULATION_AND_WEBPAY_INTEGRATION"
+PREVIOUS_PEDIDOS = REGISTRY + "fazbears-pedidos@sha256:e425eb1c1bda1f078e478a146eb94eb2aa478227bac888e280240201e9f00281"
 
 
 def image_for(service):
@@ -215,8 +217,16 @@ def app(config, credentials):
         os.chown(directory, 10001, 10001)
         mount = ["-v", f"{directory}:/var/lib/fazbear/{db}"]
     container_name = f"ev3-replica-{db}"
-    start_container(container_name, config["image"], env,
-                    ["--memory", "600m", "-p", f"{config['host']}:{config['port']}:{config['container_port']}", *mount])
+    options = ["--memory", "600m", "-p", f"{config['host']}:{config['port']}:{config['container_port']}", *mount]
+    if config.get("operation") == "pedidos_receipt":
+        release_pedidos(config, env, options)
+        return
+    start_container(container_name, config["image"], env, options)
+    verify_app(config)
+
+
+def verify_app(config):
+    name = config["name"]
     url = f"http://{config['host']}:{config['port']}{config['health']}"
     opener = build_opener(ProxyHandler({}))
 
@@ -236,8 +246,47 @@ def app(config, credentials):
     try:
         wait_until(healthy, name)
     except RuntimeError as error:
-        raise RuntimeError(f"{error} Ultimo HTTP: {last_code}. Revisar sudo docker logs --tail 50 {container_name} en su EC2.") from error
+        raise RuntimeError(f"{error} Ultimo HTTP: {last_code}. Revisar sudo docker logs --tail 50 ev3-replica-{name.lower()} en su EC2.") from error
     print(f"{name} · HTTP {last_code} en el puerto {config['port']}.", flush=True)
+
+
+def release_pedidos(config, env, options):
+    name = "ev3-replica-pedidos"
+    directory = ROOT / "data" / "pedidos"
+    info = json.loads(checked(["docker", "inspect", "--type", "container", name], "Inventario de Pedidos"))[0]
+    current_image = info["Config"]["Image"]
+    if (not info["State"]["Running"] or (info["Config"].get("Labels") or {}).get(CONTAINER_LABEL) != name
+            or current_image not in (PREVIOUS_PEDIDOS, config["image"])):
+        raise RuntimeError("Pedidos debe estar en ejecución con una de las revisiones esperadas.")
+    mounts = [(item["Type"], item["Source"], item["Destination"], item["RW"]) for item in info.get("Mounts", [])]
+    database = directory / "pedidosdb.mv.db"
+    if (mounts != [("bind", str(directory), "/var/lib/fazbear/pedidos", True)]
+            or not database.is_file() or database.stat().st_size == 0):
+        raise RuntimeError("No se encontró la base H2 persistente de Pedidos en el montaje esperado.")
+    if current_image == config["image"]:
+        start_container(name, config["image"], env, options)
+        verify_app(config)
+        return
+    checked(["docker", "pull", config["image"]], "Descarga de Pedidos")
+    previous = f"{name}-antes-{time.time_ns()}"
+    checked(["docker", "rename", name, previous], "Preparar respaldo del contenedor de Pedidos")
+    try:
+        checked(["docker", "stop", "--time", "35", previous], "Detención de la revisión anterior")
+        snapshot = ROOT / f"{previous}.mv.db"
+        with database.open("rb") as source, snapshot.open("xb") as destination:
+            shutil.copyfileobj(source, destination)
+        if snapshot.stat().st_size != database.stat().st_size:
+            raise RuntimeError("La copia privada de H2 no coincide con el original.")
+        print(f"Respaldo privado de Pedidos: {snapshot.name}", flush=True)
+        start_container(name, config["image"], env, options, image_ready=True)
+        verify_app(config)
+    except (RuntimeError, OSError, ValueError, subprocess.SubprocessError):
+        if ready_command("docker", "inspect", "--type", "container", name):
+            checked(["docker", "rm", "-f", name], "Retirar candidato de Pedidos")
+        checked(["docker", "rename", previous, name], "Restaurar el contenedor de Pedidos")
+        checked(["docker", "start", name], "Arrancar la revisión anterior de Pedidos")
+        verify_app(config)
+        raise RuntimeError("La nueva imagen de Pedidos no pasó la verificación. Se recuperó la revisión anterior.") from None
 
 
 def webpay_release(config):
@@ -321,7 +370,7 @@ def host_operation(config):
                           "--with-decryption", "--query", "Parameter.Value", "--output", "text"],
                          "Lectura de configuración cifrada por LabInstanceProfile")
         credentials = json.loads(output)
-        if operation == "app":
+        if operation in ("app", "pedidos_receipt"):
             app(config, credentials)
         elif operation == "postgres":
             postgres(config["host"], credentials)
@@ -425,7 +474,7 @@ def verify_targets(aws, stack_name, hosts):
         raise RuntimeError(f"{error} Pendientes: {', '.join(pending)}") from error
 
 
-def launch(account, *, proxy_only=False, webpay_image=None):
+def launch(account, *, proxy_only=False, webpay_image=None, pedidos_receipt=False):
     from replica_infra import KAFKA_CLIENTS, REGION, SERVICES, STACK, aws
 
     if aws("sts", "get-caller-identity")["Account"] != account:
@@ -436,7 +485,8 @@ def launch(account, *, proxy_only=False, webpay_image=None):
         raise RuntimeError("Primero aplicar replica_infra.py --data-containers y esperar que CloudFormation termine.")
     outputs = {item["OutputKey"]: item["OutputValue"] for item in stack["Outputs"]}
     hosts = {name: outputs[f"{name}Instance"] for name in SERVICES}
-    required_hosts = {hosts["Pago"]} if webpay_image else {hosts["Analytics"]} if proxy_only else set(hosts.values())
+    service = "Pago" if webpay_image else "Pedidos" if pedidos_receipt else "Analytics" if proxy_only else None
+    required_hosts = {hosts[service]} if service else set(hosts.values())
 
     def online():
         nodes = aws("ssm", "describe-instance-information")["InstanceInformationList"]
@@ -456,6 +506,11 @@ def launch(account, *, proxy_only=False, webpay_image=None):
         parameter = f"/{STACK}/runtime"
         prepare_credentials(aws, parameter)
         configs = application_configs(outputs, SERVICES, KAFKA_CLIENTS, REGION, parameter)
+        if pedidos_receipt:
+            config = {**configs["Pedidos"], "operation": "pedidos_receipt"}
+            deploy_many(aws, [("Pedidos", hosts["Pedidos"], config)], payload)
+            verify_targets(aws, STACK, {"Pedidos": hosts["Pedidos"]})
+            return
         deploy_many(aws, [("PostgreSQL", hosts["Pago"], {**configs["Pago"], "operation": "postgres"}),
                           ("RabbitMQ", hosts["Notificaciones"], {**configs["Notificaciones"], "operation": "rabbit"})], payload)
         deploy_many(aws, [(name, hosts[name], configs[name]) for name in SERVICES], payload)
@@ -473,6 +528,7 @@ def main():
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--proxy-only", action="store_true", help="install and check only the private CORS proxy")
     mode.add_argument("--webpay-image", help="roll out only the published Pago V7 image and enable integration Webpay")
+    mode.add_argument("--pedidos-receipt", action="store_true", help="roll out Confirmar recepción to Pedidos only")
     parser.add_argument("--host", help=argparse.SUPPRESS)
     args = parser.parse_args()
     if not args.host and (not args.apply or not args.account or len(args.account) != 12 or not args.account.isdecimal()):
@@ -484,7 +540,7 @@ def main():
             os.umask(0o077)
             host_operation(json.loads(base64.b64decode(args.host)))
         else:
-            launch(args.account, proxy_only=args.proxy_only, webpay_image=args.webpay_image)
+            launch(args.account, proxy_only=args.proxy_only, webpay_image=args.webpay_image, pedidos_receipt=args.pedidos_receipt)
     except (RuntimeError, OSError, ValueError, subprocess.SubprocessError) as error:
         print(f"ERROR: {error}", file=sys.stderr)
         return 1
