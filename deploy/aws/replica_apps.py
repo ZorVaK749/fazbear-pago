@@ -159,7 +159,7 @@ def rabbit(host, credentials):
 
 
 def cors_proxy(host, backend_dns, frontend_origin):
-    if not re.fullmatch(r"[A-Za-z0-9.-]+\.elb\.us-east-1\.amazonaws\.com", backend_dns):
+    if not re.fullmatch(r"[A-Za-z0-9-]+\.(?:us-east-1\.elb|elb\.us-east-1)\.amazonaws\.com", backend_dns):
         raise RuntimeError("El DNS del balanceador de la réplica no tiene el formato esperado.")
     nginx = ROOT / "cors-proxy.conf"
     nginx.write_text(f"""
@@ -337,7 +337,7 @@ def verify_targets(aws, stack_name, hosts):
         raise RuntimeError(f"{error} Pendientes: {', '.join(pending)}") from error
 
 
-def launch(account):
+def launch(account, *, proxy_only=False):
     from replica_infra import KAFKA_CLIENTS, REGION, SERVICES, STACK, aws
 
     if aws("sts", "get-caller-identity")["Account"] != account:
@@ -348,20 +348,22 @@ def launch(account):
         raise RuntimeError("Primero aplicar replica_infra.py --data-containers y esperar que CloudFormation termine.")
     outputs = {item["OutputKey"]: item["OutputValue"] for item in stack["Outputs"]}
     hosts = {name: outputs[f"{name}Instance"] for name in SERVICES}
+    required_hosts = {hosts["Analytics"]} if proxy_only else set(hosts.values())
 
     def online():
         nodes = aws("ssm", "describe-instance-information")["InstanceInformationList"]
-        return set(hosts.values()) <= {node["InstanceId"] for node in nodes if node["PingStatus"] == "Online"}
+        return required_hosts <= {node["InstanceId"] for node in nodes if node["PingStatus"] == "Online"}
 
-    wait_until(online, "las nueve EC2 en Systems Manager")
-    parameter = f"/{STACK}/runtime"
-    prepare_credentials(aws, parameter)
+    wait_until(online, "las EC2 seleccionadas en Systems Manager")
     payload = base64.b64encode(gzip.compress(Path(__file__).read_bytes())).decode()
-    configs = application_configs(outputs, SERVICES, KAFKA_CLIENTS, REGION, parameter)
-    deploy_many(aws, [("PostgreSQL", hosts["Pago"], {**configs["Pago"], "operation": "postgres"}),
-                      ("RabbitMQ", hosts["Notificaciones"], {**configs["Notificaciones"], "operation": "rabbit"})], payload)
-    deploy_many(aws, [(name, hosts[name], configs[name]) for name in SERVICES], payload)
-    verify_targets(aws, STACK, hosts)
+    if not proxy_only:
+        parameter = f"/{STACK}/runtime"
+        prepare_credentials(aws, parameter)
+        configs = application_configs(outputs, SERVICES, KAFKA_CLIENTS, REGION, parameter)
+        deploy_many(aws, [("PostgreSQL", hosts["Pago"], {**configs["Pago"], "operation": "postgres"}),
+                          ("RabbitMQ", hosts["Notificaciones"], {**configs["Notificaciones"], "operation": "rabbit"})], payload)
+        deploy_many(aws, [(name, hosts[name], configs[name]) for name in SERVICES], payload)
+        verify_targets(aws, STACK, hosts)
     proxy_config = {"operation": "cors_proxy", "host": outputs["AnalyticsIp"], "backend_dns": outputs["BackendAlbDns"],
                     "frontend_origin": outputs["Frontend"].removesuffix("/ev3/")}
     deploy_many(aws, [("Proxy CORS", hosts["Analytics"], proxy_config)], payload)
@@ -372,6 +374,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--account", help="Expected 12-digit AWS account ID")
     parser.add_argument("--apply", action="store_true")
+    parser.add_argument("--proxy-only", action="store_true", help="install and check only the private CORS proxy")
     parser.add_argument("--host", help=argparse.SUPPRESS)
     args = parser.parse_args()
     if not args.host and (not args.apply or not args.account or len(args.account) != 12 or not args.account.isdecimal()):
@@ -380,7 +383,7 @@ def main():
         if args.host:
             host_operation(json.loads(base64.b64decode(args.host)))
         else:
-            launch(args.account)
+            launch(args.account, proxy_only=args.proxy_only)
     except (RuntimeError, OSError, ValueError, subprocess.SubprocessError) as error:
         print(f"ERROR: {error}", file=sys.stderr)
         return 1
