@@ -2,6 +2,7 @@
 """Provision the AWS foundation for a second Pedidos360 EV3 laboratory."""
 
 import argparse
+import hashlib
 import ipaddress
 import json
 import re
@@ -28,6 +29,58 @@ SERVICES = {
     "Fidelizacion": (8089, "/api/fidelizacion", "/health", "200"),
 }
 KAFKA_CLIENTS = ("Productos", "Carrito", "Pago", "Analytics", "Fidelizacion")
+
+BACKEND_METHODS = {
+    # Productos
+    "/api/productos": "GET POST",
+    "/api/productos/{id}": "GET PUT DELETE",
+    "/api/productos/categoria/{categoria}": "GET",
+    "/api/productos/{id}/interacciones": "POST",
+    # Carrito
+    "/api/carrito/me": "GET",
+    "/api/carrito/{usuarioId}": "GET DELETE",
+    "/api/carrito/{usuarioId}/items": "POST",
+    "/api/carrito/{usuarioId}/items/{itemId}": "DELETE",
+    "/api/carrito/{usuarioId}/items/comprados": "DELETE",
+    # Pedidos
+    "/api/pedidos": "GET POST",
+    "/api/pedidos/{id}": "GET DELETE",
+    "/api/pedidos/usuario/{usuarioId}": "GET",
+    "/api/pedidos/{id}/estado": "PUT",
+    # Orden and checkout
+    "/api/orden/health": "GET",
+    "/api/orden/confirmar": "POST",
+    "/api/orden/cotizaciones": "POST",
+    "/api/orden/cotizaciones/{id}": "GET",
+    "/api/orden/confirmar-pago": "POST",
+    # Notificaciones and Reportes
+    "/api/notificaciones/health": "GET",
+    "/api/notificaciones/prueba-correo": "POST",
+    "/api/reportes/resumen": "GET",
+    "/api/reportes/ingresos": "GET",
+    "/api/reportes/health": "GET",
+    # Pago and Webpay
+    "/api/pagos": "POST",
+    "/api/pagos/{id}": "GET",
+    "/api/pagos/me": "GET",
+    "/api/pagos/{id}/anulacion": "POST",
+    "/api/pagos/{id}/intentos": "GET",
+    "/api/pagos/me/alertas": "GET",
+    "/api/pagos/webpay": "POST",
+    "/api/pagos/webpay/capacidad": "GET",
+    "/api/pagos/webpay/retorno": "POST",
+    "/api/pagos/webpay/{id}/estado": "POST",
+    # Analytics and recommendations
+    "/api/recomendaciones/me": "GET",
+    "/api/analytics/me/resumen": "GET",
+    "/api/analytics/me/dashboard-ticket": "POST",
+    # Fidelizacion
+    "/api/fidelizacion/me/saldo": "GET",
+    "/api/fidelizacion/me/movimientos": "GET",
+    "/api/fidelizacion/recompensas": "GET",
+    "/api/fidelizacion/me/canjes": "POST",
+}
+BACKEND_ROUTES = tuple(f"{method} {path}" for path, methods in BACKEND_METHODS.items() for method in methods.split())
 
 
 def ref(name):
@@ -70,6 +123,7 @@ def template():
     outputs = {
         "Frontend": {"Value": sub("${Endpoint}/ev3/", {"Endpoint": endpoint("FrontendApi")})},
         "Backend": {"Value": sub("${Endpoint}/ev3/api", {"Endpoint": endpoint("BackendApi")})},
+        "BackendApiId": {"Value": ref("BackendApi")},
         "WebpayReturn": {"Value": sub("${Endpoint}/ev3/checkout/webpay", {"Endpoint": endpoint("FrontendApi")})},
         "KafkaBootstrap": {"Value": sub("${KafkaNlb.DNSName}:9092")},
         "BackendAlbDns": {"Value": attr("Alb", "DNSName")},
@@ -184,25 +238,25 @@ def template():
             ConnectionId=ref("VpcLink"), IntegrationType="HTTP_PROXY", IntegrationMethod="ANY",
             IntegrationUri=listener, PayloadFormatVersion="1.0",
             RequestParameters={"overwrite:path": "$request.path"})
-        authorization = {"AuthorizationType": "NONE"}
+        integration_target = sub(f"integrations/${{{integration}}}")
         if prefix == "Backend":
             add("Entra", "AWS::ApiGatewayV2::Authorizer", Name="Microsoft-Entra", ApiId=ref(api),
                 AuthorizerType="JWT", IdentitySource=["$request.header.Authorization"],
                 JwtConfiguration={"Issuer": f"https://login.microsoftonline.com/{TENANT}/v2.0",
                                   "Audience": [AUDIENCE, f"api://{AUDIENCE}"]})
-            authorization = {"AuthorizationType": "JWT", "AuthorizerId": ref("Entra"),
-                             "AuthorizationScopes": ["access_as_user"]}
-        for suffix, key in (("Root", "GET /"), ("Proxy", "ANY /{proxy+}")) if prefix == "Frontend" else (
-            ("Proxy", "ANY /api/{proxy+}"),
-        ):
-            add(f"{prefix}{suffix}", "AWS::ApiGatewayV2::Route", ApiId=ref(api), RouteKey=key,
-                Target=sub(f"integrations/${{{integration}}}"), **authorization)
-        route_resources = [f"{prefix}Proxy"] + (["FrontendRoot"] if prefix == "Frontend" else [])
-        if prefix == "Backend":
-            add("BackendPreflight", "AWS::ApiGatewayV2::Route", ApiId=ref(api), RouteKey="OPTIONS /api/{proxy+}",
-                Target=sub(f"integrations/${{{integration}}}"), AuthorizationType="NONE")
-            route_resources.append("BackendPreflight")
-        add(f"{prefix}Stage", "AWS::ApiGatewayV2::Stage", depends_on=route_resources,
+            for key in BACKEND_ROUTES:
+                logical_id = "Route" + hashlib.sha256(key.encode()).hexdigest()[:16]
+                authorization = {"AuthorizationType": "JWT", "AuthorizerId": ref("Entra"),
+                                 "AuthorizationScopes": ["access_as_user"]}
+                add(logical_id, "AWS::ApiGatewayV2::Route", ApiId=ref(api), RouteKey=key,
+                    Target=integration_target, **authorization)
+            stage_dependencies = [integration, "Entra"]
+        else:
+            for suffix, key in (("Root", "GET /"), ("Proxy", "ANY /{proxy+}")):
+                add(f"Frontend{suffix}", "AWS::ApiGatewayV2::Route", ApiId=ref(api), RouteKey=key,
+                    Target=integration_target, AuthorizationType="NONE")
+            stage_dependencies = ["FrontendRoot", "FrontendProxy"]
+        add(f"{prefix}Stage", "AWS::ApiGatewayV2::Stage", depends_on=stage_dependencies,
             ApiId=ref(api), StageName="ev3", AutoDeploy=True)
 
     add("Cluster", "AWS::ECS::Cluster", ClusterName=sub("${AWS::StackName}"))
@@ -292,6 +346,27 @@ def deploy_stack(path, flags, parameters):
         raise
 
 
+def verify_backend_routes(api_id):
+    authorizers = aws("apigatewayv2", "get-authorizers", "--api-id", api_id)["Items"]
+    entra = next((item for item in authorizers if item["Name"] == "Microsoft-Entra"), None)
+    if not entra or entra["AuthorizerType"] != "JWT" or entra["JwtConfiguration"]["Issuer"] != (
+        f"https://login.microsoftonline.com/{TENANT}/v2.0"
+    ) or set(entra["JwtConfiguration"]["Audience"]) != {AUDIENCE, f"api://{AUDIENCE}"}:
+        raise RuntimeError("El autorizador desplegado no coincide con Microsoft Entra.")
+    routes = {item["RouteKey"]: item for item in aws("apigatewayv2", "get-routes", "--api-id", api_id)["Items"]}
+    expected = set(BACKEND_ROUTES)
+    missing = sorted(expected - routes.keys())
+    extra = sorted(routes.keys() - expected)
+    if missing or extra:
+        raise RuntimeError(f"Rutas backend faltantes: {missing} · adicionales: {extra}")
+    for key in BACKEND_ROUTES:
+        route = routes[key]
+        if (route["AuthorizationType"] != "JWT" or route.get("AuthorizerId") != entra["AuthorizerId"]
+                or route.get("AuthorizationScopes") != ["access_as_user"]):
+            raise RuntimeError(f"Autorización inesperada en {key}.")
+    print(f"Backend {api_id} · {len(BACKEND_ROUTES)} rutas explícitas con JWT y access_as_user verificadas.")
+
+
 def deploy(args):
     identity = aws("sts", "get-caller-identity")
     if identity["Account"] != args.account:
@@ -307,7 +382,7 @@ def deploy(args):
                                + ", ".join(other))
     with tempfile.TemporaryDirectory(prefix="pedidos360-replica-") as directory:
         path = Path(directory) / "replica.json"
-        path.write_text(json.dumps(template()), encoding="utf-8")
+        path.write_text(json.dumps(template(), separators=(",", ":")), encoding="utf-8")
         aws("cloudformation", "validate-template", "--template-body", path.resolve().as_uri())
         flags = ["--no-execute-changeset"] if args.plan else []
         parameters = [f"InstanceProfile={args.profile}"]
@@ -326,6 +401,8 @@ def deploy(args):
         stack = aws("cloudformation", "describe-stacks", "--stack-name", STACK)["Stacks"][0]
         for item in stack.get("Outputs", []):
             print(f"{item['OutputKey']} = {item['OutputValue']}")
+        api_id = next(item["OutputValue"] for item in stack["Outputs"] if item["OutputKey"] == "BackendApiId")
+        verify_backend_routes(api_id)
 
 
 def main():
