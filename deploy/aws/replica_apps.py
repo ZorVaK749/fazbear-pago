@@ -4,6 +4,7 @@
 import argparse
 import base64
 import gzip
+from getpass import getpass
 import hashlib
 import json
 import os
@@ -36,6 +37,8 @@ VOLUMES = ("Carrito", "Pedidos", "Notificaciones", "Reportes")
 CONTAINER_LABEL = "cl.pedidos360.replica"
 CONFIG_LABEL = "cl.pedidos360.replica.config"
 ROOT = Path("/etc/pedidos360-replica")
+WEBPAY_TEST_COMMERCE = "597055555532"
+WEBPAY_MODE = "SIMULATION_AND_WEBPAY_INTEGRATION"
 
 
 def image_for(service):
@@ -96,7 +99,7 @@ def wait_until(probe, description, seconds=125):
         time.sleep(3)
 
 
-def start_container(name, image, env, options):
+def start_container(name, image, env, options, *, image_ready=False):
     fingerprint = hashlib.sha256(json.dumps((image, env, options), sort_keys=True).encode()).hexdigest()
     current = subprocess.run(["docker", "inspect", "--type", "container", name], capture_output=True, text=True)
     if current.returncode == 0:
@@ -109,7 +112,8 @@ def start_container(name, image, env, options):
         return
     if "No such" not in current.stderr:
         raise RuntimeError(f"Docker aún no responde en la EC2 de {name}.")
-    checked(["docker", "pull", image], f"Descarga de {image}")
+    if not image_ready:
+        checked(["docker", "pull", image], f"Descarga de {image}")
     with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=ROOT) as env_file:
         for key, value in env.items():
             if "\n" in value or "\r" in value:
@@ -236,6 +240,69 @@ def app(config, credentials):
     print(f"{name} · HTTP {last_code} en el puerto {config['port']}.", flush=True)
 
 
+def webpay_release(config):
+    name = "ev3-replica-pago"
+    backup = f"{name}-prewebpay-{time.time_ns()}"
+    current = json.loads(checked(["docker", "inspect", "--type", "container", name], "Inventario de Pago"))[0]
+    if (not current["State"]["Running"] or (current["Config"].get("Labels") or {}).get(CONTAINER_LABEL) != name
+            or current.get("Mounts")):
+        raise RuntimeError("Pago debe estar en ejecución, administrado por la réplica y sin montajes propios.")
+    credential = checked(["aws", "ssm", "get-parameter", "--region", config["region"], "--name", config["parameter"],
+                          "--with-decryption", "--query", "Parameter.Value", "--output", "text"],
+                         "Lectura de la llave Webpay de integración").strip()
+    if not re.fullmatch(r"[0-9A-Fa-f]{64}", credential):
+        raise RuntimeError("La llave de integración guardada no tiene el formato esperado.")
+    original = dict(entry.split("=", 1) for entry in current["Config"]["Env"])
+    desired = {**original, "WEBPAY_ENABLED": "true", "WEBPAY_COMMERCE_CODE": WEBPAY_TEST_COMMERCE,
+               "WEBPAY_API_KEY": credential, "WEBPAY_RETURN_URL": config["return_url"]}
+    host = config["host"]
+    opener = build_opener(ProxyHandler({}))
+
+    def webpay_ready():
+        try:
+            with opener.open(f"http://{host}:8087/health", timeout=4) as response:
+                return json.load(response).get("mode") == WEBPAY_MODE
+        except (URLError, TimeoutError, ValueError):
+            return False
+
+    def verify_release():
+        wait_until(webpay_ready, "Webpay Plus de integración")
+        postgres = ["docker", "exec", "ev3-replica-postgres", "psql", "-U", "ev3admin", "-d", "pago",
+                    "-X", "-qAt", "-v", "ON_ERROR_STOP=1"]
+        migration = checked([*postgres, "-c",
+                             "SELECT EXISTS(SELECT 1 FROM flyway_schema_history WHERE version='7' AND success)"],
+                            "Verificación de Flyway V7").strip()
+        if migration != "t":
+            raise RuntimeError("Pago aún no tiene aplicada la migración V7.")
+        print("Pago · Webpay Plus de integración activo · antifraude V7 aplicado.", flush=True)
+
+    if current["Config"]["Image"] == config["image"] and original == desired:
+        verify_release()
+        return
+
+    checked(["docker", "pull", config["image"]], "Descarga de la imagen de Pago")
+    snapshot = ROOT / f"{backup}.dump"
+    with snapshot.open("xb") as output:
+        result = subprocess.run(["docker", "exec", "ev3-replica-postgres", "pg_dump",
+                                 "-U", "ev3admin", "-Fc", "pago"], stdout=output,
+                                stderr=subprocess.DEVNULL, timeout=120)
+    if result.returncode or snapshot.stat().st_size == 0:
+        raise RuntimeError("No se pudo respaldar PostgreSQL de Pago.")
+    print(f"Respaldo privado de Pago: {snapshot.name}", flush=True)
+    checked(["docker", "rename", name, backup], "Renombrar Pago anterior")
+    try:
+        checked(["docker", "stop", backup], "Detener Pago anterior")
+        start_container(name, config["image"], desired,
+                        ["--memory", "600m", "-p", f"{host}:8087:8080"], image_ready=True)
+        verify_release()
+    except (RuntimeError, OSError, ValueError, subprocess.SubprocessError):
+        if ready_command("docker", "inspect", "--type", "container", name):
+            checked(["docker", "rm", "-f", name], "Retirar candidato de Pago")
+        checked(["docker", "rename", backup, name], "Restaurar el nombre de Pago")
+        checked(["docker", "start", name], "Volver a iniciar Pago anterior")
+        raise RuntimeError("La nueva revisión no pasó la verificación. Se volvió a iniciar el Pago anterior.") from None
+
+
 def host_operation(config):
     import fcntl
 
@@ -246,6 +313,9 @@ def host_operation(config):
         operation = config.get("operation", "app")
         if operation == "cors_proxy":
             cors_proxy(config["host"], config["backend_dns"], config["frontend_origin"])
+            return
+        if operation == "webpay_release":
+            webpay_release(config)
             return
         output = checked(["aws", "ssm", "get-parameter", "--region", config["region"], "--name", config["parameter"],
                           "--with-decryption", "--query", "Parameter.Value", "--output", "text"],
@@ -278,6 +348,24 @@ def prepare_credentials(aws, parameter):
         except RuntimeError as error:
             if "ParameterAlreadyExists" not in str(error):
                 raise
+
+
+def prepare_webpay_key(aws, parameter):
+    try:
+        aws("ssm", "get-parameter", "--name", parameter, "--query", "Parameter.Name")
+        return
+    except RuntimeError as error:
+        if "ParameterNotFound" not in str(error):
+            raise
+    if not sys.stdin.isatty() or not sys.stderr.isatty():
+        raise RuntimeError("Abre una sesión interactiva de CloudShell para ingresar la llave de integración.")
+    key = getpass("Llave pública del ambiente de integración Webpay Plus (entrada oculta): ").strip()
+    if not re.fullmatch(r"[0-9A-Fa-f]{64}", key):
+        raise RuntimeError("La llave de integración debe tener 64 caracteres hexadecimales.")
+    with tempfile.TemporaryDirectory(prefix="pedidos360-webpay-") as directory:
+        path = Path(directory) / "ssm.json"
+        path.write_text(json.dumps({"Name": parameter, "Type": "SecureString", "Value": key}), encoding="utf-8")
+        aws("ssm", "put-parameter", "--cli-input-json", path.resolve().as_uri())
 
 
 def deploy_many(aws, operations, payload):
@@ -337,7 +425,7 @@ def verify_targets(aws, stack_name, hosts):
         raise RuntimeError(f"{error} Pendientes: {', '.join(pending)}") from error
 
 
-def launch(account, *, proxy_only=False):
+def launch(account, *, proxy_only=False, webpay_image=None):
     from replica_infra import KAFKA_CLIENTS, REGION, SERVICES, STACK, aws
 
     if aws("sts", "get-caller-identity")["Account"] != account:
@@ -348,7 +436,7 @@ def launch(account, *, proxy_only=False):
         raise RuntimeError("Primero aplicar replica_infra.py --data-containers y esperar que CloudFormation termine.")
     outputs = {item["OutputKey"]: item["OutputValue"] for item in stack["Outputs"]}
     hosts = {name: outputs[f"{name}Instance"] for name in SERVICES}
-    required_hosts = {hosts["Analytics"]} if proxy_only else set(hosts.values())
+    required_hosts = {hosts["Pago"]} if webpay_image else {hosts["Analytics"]} if proxy_only else set(hosts.values())
 
     def online():
         nodes = aws("ssm", "describe-instance-information")["InstanceInformationList"]
@@ -356,6 +444,14 @@ def launch(account, *, proxy_only=False):
 
     wait_until(online, "las EC2 seleccionadas en Systems Manager")
     payload = base64.b64encode(gzip.compress(Path(__file__).read_bytes())).decode()
+    if webpay_image:
+        parameter = f"/{STACK}/webpay-integration"
+        prepare_webpay_key(aws, parameter)
+        config = {"operation": "webpay_release", "image": webpay_image, "host": outputs["PagoIp"],
+                  "region": REGION, "parameter": parameter, "return_url": outputs["WebpayReturn"]}
+        deploy_many(aws, [("Webpay", hosts["Pago"], config)], payload)
+        verify_targets(aws, STACK, {"Pago": hosts["Pago"]})
+        return
     if not proxy_only:
         parameter = f"/{STACK}/runtime"
         prepare_credentials(aws, parameter)
@@ -374,16 +470,21 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--account", help="Expected 12-digit AWS account ID")
     parser.add_argument("--apply", action="store_true")
-    parser.add_argument("--proxy-only", action="store_true", help="install and check only the private CORS proxy")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--proxy-only", action="store_true", help="install and check only the private CORS proxy")
+    mode.add_argument("--webpay-image", help="roll out only the published Pago V7 image and enable integration Webpay")
     parser.add_argument("--host", help=argparse.SUPPRESS)
     args = parser.parse_args()
     if not args.host and (not args.apply or not args.account or len(args.account) != 12 or not args.account.isdecimal()):
         parser.error("usar --account con el ID de cuenta de 12 dígitos y --apply")
+    if args.webpay_image and not re.fullmatch(REGISTRY + r"fazbear-pago@sha256:[a-f0-9]{64}", args.webpay_image):
+        parser.error("--webpay-image requiere el digest GHCR de Pago")
     try:
         if args.host:
+            os.umask(0o077)
             host_operation(json.loads(base64.b64decode(args.host)))
         else:
-            launch(args.account, proxy_only=args.proxy_only)
+            launch(args.account, proxy_only=args.proxy_only, webpay_image=args.webpay_image)
     except (RuntimeError, OSError, ValueError, subprocess.SubprocessError) as error:
         print(f"ERROR: {error}", file=sys.stderr)
         return 1

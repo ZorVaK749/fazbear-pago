@@ -88,6 +88,18 @@ ORDER BY r.attempted_at, r.id;
 COMMIT;
 """
 
+WEBPAY_ANTIFRAUD_QUERY = """
+BEGIN READ ONLY;
+SELECT to_char(p.created_at AT TIME ZONE 'America/Santiago', 'YYYY-MM-DD HH24:MI:SS.MS') AS hora_santiago,
+       p.status AS estado, d.attempts_in_window AS intentos_en_ventana, d.blocked AS alerta_registrada,
+       w.provider_token IS NOT NULL AS token_transbank_recibido
+FROM webpay_start_decision d
+JOIN payment p ON p.id=d.payment_id
+LEFT JOIN webpay_transaction w ON w.payment_id=p.id
+ORDER BY p.created_at DESC, p.id DESC LIMIT 12;
+COMMIT;
+"""
+
 
 def python_probe(code):
     return f"python3 -c {shlex.quote(code)}"
@@ -119,15 +131,18 @@ def main():
     modes.add_argument("--install-kafka-ui", action="store_true", help="install the private Kafdrop dashboard and take baseline metrics")
     modes.add_argument("--check", action="store_true", help="read Kafka and RabbitMQ metrics again")
     modes.add_argument("--antifraude", action="store_true", help="read simulated attempts and alerts from Pago")
+    modes.add_argument("--antifraude-webpay", action="store_true", help="read Webpay account decisions from Pago")
     args = parser.parse_args()
     try:
         if aws("sts", "get-caller-identity")["Account"] != args.account:
             raise RuntimeError("La sesión no corresponde a la cuenta del respaldo.")
         stack = aws("cloudformation", "describe-stacks", "--stack-name", STACK)["Stacks"][0]
         outputs = {item["OutputKey"]: item["OutputValue"] for item in stack["Outputs"]}
-        if args.antifraude:
+        if args.antifraude or args.antifraude_webpay:
             command = "docker exec ev3-replica-postgres psql -X -q --csv -U ev3admin -d pago -v ON_ERROR_STOP=1 -c "
-            inspect_host(outputs["PagoInstance"], [command + shlex.quote(ANTIFRAUD_QUERY)], "antifraude simulado")
+            query = WEBPAY_ANTIFRAUD_QUERY if args.antifraude_webpay else ANTIFRAUD_QUERY
+            label = "antifraude Webpay" if args.antifraude_webpay else "antifraude simulado"
+            inspect_host(outputs["PagoInstance"], [command + shlex.quote(query)], label)
             return 0
         print("RabbitMQ y Notificaciones", flush=True)
         inspect_host(outputs["NotificacionesInstance"], [python_probe(RABBIT_PROBE)], "RabbitMQ")
