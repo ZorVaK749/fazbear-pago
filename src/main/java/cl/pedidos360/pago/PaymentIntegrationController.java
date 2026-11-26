@@ -33,7 +33,10 @@ public class PaymentIntegrationController {
         return jdbc.queryForList("""
                 SELECT a.id,a.attempted_at,d.blocked,d.attempts_in_window,d.rule
                 FROM payment_attempt a JOIN antifraud_decision d ON d.attempt_id=a.id WHERE a.payment_id=?
-                """, id);
+                UNION ALL
+                SELECT p.id,p.created_at,w.blocked,w.attempts_in_window,?
+                FROM webpay_start_decision w JOIN payment p ON p.id=w.payment_id WHERE p.id=?
+                """, id, WebpayService.ACCOUNT_RULE, id);
     }
 
     @GetMapping("/api/pagos/me/alertas")
@@ -41,7 +44,11 @@ public class PaymentIntegrationController {
         Owner owner = Owner.from(jwt);
         return jdbc.queryForList("""
                 SELECT f.payment_id,f.rule,f.created_at FROM fraud_alert f JOIN payment p ON p.id=f.payment_id
-                WHERE p.tenant_id=? AND p.owner_id=? ORDER BY f.created_at DESC LIMIT 100
-                """, owner.tenant(), owner.oid());
+                WHERE p.tenant_id=? AND p.owner_id=?
+                UNION ALL
+                SELECT p.id,?,p.created_at FROM webpay_start_decision w JOIN payment p ON p.id=w.payment_id
+                WHERE w.blocked AND p.tenant_id=? AND p.owner_id=?
+                ORDER BY created_at DESC LIMIT 100
+                """, owner.tenant(), owner.oid(), WebpayService.ACCOUNT_RULE, owner.tenant(), owner.oid());
     }
 }

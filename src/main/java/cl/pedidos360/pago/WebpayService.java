@@ -7,6 +7,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.sql.Timestamp;
+import java.time.OffsetDateTime;
 import java.util.HexFormat;
 import java.util.Map;
 import java.util.UUID;
@@ -22,6 +23,8 @@ import org.springframework.web.client.RestClientResponseException;
 @Service
 @ConditionalOnProperty(name = "pago.webpay.enabled", havingValue = "true")
 class WebpayService {
+    static final String ACCOUNT_RULE = "WEBPAY_ACCOUNT_MORE_THAN_3_IN_10_SECONDS";
+    static final String ACCOUNT_RATE_LIMIT = "WEBPAY_ACCOUNT_RATE_LIMIT";
     private static final Logger log = LoggerFactory.getLogger(WebpayService.class);
     private final JdbcTemplate db;
     private final TransactionTemplate tx;
@@ -41,13 +44,14 @@ class WebpayService {
     record Return(String tokenWs, String tbkToken, String buyOrder, String sessionId) {
         @Override public String toString() { return "Webpay return"; }
     }
-    private record Reservation(UUID payment, String order, String session, int amount, boolean created) {}
+    private record Reservation(UUID payment, String order, String session, int amount, boolean created, boolean blocked) {}
     private record MatchedReturn(UUID payment, boolean firstNormalReturn) {}
     private enum Confirmation { DIRECT, RESUME, STATUS_ONLY }
 
     Redirect start(Owner owner, UUID operation, String key) {
         if (key == null || !key.matches("[A-Za-z0-9._:-]{1,128}")) throw new ApiException(400, "INVALID_IDEMPOTENCY_KEY");
         Reservation reservation = tx.execute(status -> reserve(owner, operation, key));
+        if (reservation.blocked()) throw new ApiException(429, ACCOUNT_RATE_LIMIT);
         if (reservation.created()) {
             WebpayClient.Created created;
             try {
@@ -83,18 +87,27 @@ class WebpayService {
                 WHERE tenant_id=? AND owner_id=? AND key=? FOR UPDATE
                 """, owner.tenant(), owner.oid(), key);
         if (!hash.equals(existing.get("request_hash"))) throw new ApiException(409, "IDEMPOTENCY_CONFLICT");
-        if (existing.get("payment_id") instanceof UUID id) return new Reservation(id, null, null, 0, false);
+        if (existing.get("payment_id") instanceof UUID id) {
+            boolean blocked = Boolean.TRUE.equals(db.queryForObject(
+                    "SELECT status='BLOCKED' FROM payment WHERE id=?", Boolean.class, id));
+            return new Reservation(id, null, null, 0, false, blocked);
+        }
         var quote = db.queryForList("""
                 SELECT amount,currency,expires_at FROM fixture_operation
                 WHERE id=? AND tenant_id=? AND owner_id=? FOR UPDATE
                 """, operation, owner.tenant(), owner.oid());
         if (quote.isEmpty()) throw new ApiException(404, "OPERATION_NOT_FOUND");
         var trusted = quote.getFirst();
-        if (!db.queryForObject("SELECT clock_timestamp() < ?", Boolean.class, (Timestamp) trusted.get("expires_at")))
+        // Serialize fresh attempts across this account, even when they use different quotes.
+        db.queryForList("SELECT pg_advisory_xact_lock(hashtextextended(?,0))",
+                "webpay-start:" + owner.tenant() + ":" + owner.oid());
+        OffsetDateTime now = db.queryForObject("SELECT clock_timestamp()", OffsetDateTime.class);
+        if (!now.toInstant().isBefore(((Timestamp) trusted.get("expires_at")).toInstant())) {
             throw new ApiException(409, "OPERATION_EXPIRED");
+        }
         if (Boolean.TRUE.equals(db.queryForObject("""
                 SELECT EXISTS (SELECT 1 FROM payment WHERE operation_id=?
-                AND (NOT simulation OR status IN ('APPROVED','REFUNDED')))
+                AND ((NOT simulation AND status <> 'BLOCKED') OR status IN ('APPROVED','REFUNDED')))
                 """, Boolean.class, operation))) throw new ApiException(409, "OPERATION_ALREADY_USED");
         int amount;
         try {
@@ -102,18 +115,27 @@ class WebpayService {
         } catch (ArithmeticException e) {
             throw new ApiException(422, "WEBPAY_REQUIRES_WHOLE_CLP");
         }
+
+        long count = db.queryForObject("""
+                SELECT count(*) FROM payment WHERE tenant_id=? AND owner_id=? AND NOT simulation
+                AND created_at >= ? AND created_at <= ?
+                """, Long.class, owner.tenant(), owner.oid(), now.minusSeconds(10), now) + 1;
+        boolean blocked = count > 3;
         UUID id = UUID.randomUUID();
-        var order = id.toString().replace("-", "").substring(0, 26);
-        var session = UUID.randomUUID().toString();
         db.update("""
                 INSERT INTO payment(id,operation_id,tenant_id,owner_id,amount,currency,status,created_at,simulation)
-                VALUES (?,?,?,?,?,?,'CREATING',clock_timestamp(),false)
-                """, id, operation, owner.tenant(), owner.oid(), amount, trusted.get("currency"));
-        db.update("INSERT INTO webpay_transaction(payment_id,operation_id,buy_order,session_id) VALUES (?,?,?,?)",
-                id, operation, order, session);
+                VALUES (?,?,?,?,?,?,?,?,false)
+                """, id, operation, owner.tenant(), owner.oid(), amount, trusted.get("currency"),
+                blocked ? "BLOCKED" : "CREATING", now);
+        db.update("INSERT INTO webpay_start_decision(payment_id,attempts_in_window,blocked) VALUES (?,?,?)", id, count, blocked);
         db.update("UPDATE idempotency_record SET payment_id=? WHERE tenant_id=? AND owner_id=? AND key=?",
                 id, owner.tenant(), owner.oid(), key);
-        return new Reservation(id, order, session, amount, true);
+        if (blocked) return new Reservation(id, null, null, amount, true, true);
+        var order = id.toString().replace("-", "").substring(0, 26);
+        var session = UUID.randomUUID().toString();
+        db.update("INSERT INTO webpay_transaction(payment_id,operation_id,buy_order,session_id) VALUES (?,?,?,?)",
+                id, operation, order, session);
+        return new Reservation(id, order, session, amount, true, false);
     }
 
     Payment finish(Owner owner, Return returned) {
@@ -158,8 +180,8 @@ class WebpayService {
             var rows = db.queryForList("""
                     SELECT p.status,p.amount,w.buy_order,w.session_id,w.provider_token,w.browser_return_received,
                            p.created_at < clock_timestamp() - interval '30 minutes' AS past_integration_window
-                    FROM payment p JOIN webpay_transaction w ON w.payment_id=p.id
-                    WHERE p.id=? AND p.tenant_id=? AND p.owner_id=? FOR UPDATE OF p
+                    FROM payment p LEFT JOIN webpay_transaction w ON w.payment_id=p.id
+                    WHERE p.id=? AND p.tenant_id=? AND p.owner_id=? AND NOT p.simulation FOR UPDATE OF p
                     """, id, owner.tenant(), owner.oid());
             if (rows.isEmpty()) throw new ApiException(404, "PAYMENT_NOT_FOUND");
             var saved = rows.getFirst();

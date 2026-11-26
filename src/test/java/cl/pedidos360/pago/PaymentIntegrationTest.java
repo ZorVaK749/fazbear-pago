@@ -122,6 +122,56 @@ class PaymentIntegrationTest {
     long count(String table) { return jdbc.queryForObject("SELECT count(*) FROM " + table, Long.class); }
 
     @Test
+    void webpayBlocksTheFourthNewStartByAccountAndPersistsTheAlert() throws Exception {
+        var provider = mock(WebpayClient.class);
+        when(provider.create(anyString(), anyString(), eq(12990))).thenAnswer(call ->
+                new WebpayClient.Created(UUID.randomUUID().toString().replace("-", ""), WebpayClient.FORM));
+        var webpay = new WebpayService(jdbc, tx, provider, service);
+        var firstQuote = operation(ALICE);
+        var first = webpay.start(ALICE, firstQuote, "webpay-first");
+        assertThat(webpay.start(ALICE, firstQuote, "webpay-first")).isEqualTo(first);
+        webpay.start(ALICE, operation(ALICE), "webpay-second");
+        webpay.start(ALICE, operation(ALICE), "webpay-third");
+
+        var blockedQuote = operation(ALICE);
+        for (int request = 0; request < 2; request++) {
+            assertThatThrownBy(() -> webpay.start(ALICE, blockedQuote, "webpay-fourth"))
+                    .isInstanceOfSatisfying(ApiException.class, error -> {
+                        assertThat(error.status).isEqualTo(429);
+                        assertThat(error.code).isEqualTo(WebpayService.ACCOUNT_RATE_LIMIT);
+                    });
+        }
+        verify(provider, times(3)).create(anyString(), anyString(), eq(12990));
+        assertThat(count("webpay_start_decision")).isEqualTo(4);
+        assertThat(count("webpay_transaction")).isEqualTo(3);
+        UUID blocked = jdbc.queryForObject("SELECT id FROM payment WHERE status='BLOCKED'", UUID.class);
+        assertThat(webpay.recover(ALICE, blocked).estado()).isEqualTo("BLOCKED");
+        verify(provider, never()).status(anyString());
+        assertThat(count("payment_outbox")).isZero();
+
+        var alertPath = "/api/pagos/me/alertas";
+        mvc.perform(get(alertPath).header("Authorization", "Bearer " + token(ALICE, b -> {})))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].payment_id").value(blocked.toString()))
+                .andExpect(jsonPath("$[0].rule").value(WebpayService.ACCOUNT_RULE));
+        mvc.perform(get("/api/pagos/" + blocked + "/intentos")
+                        .header("Authorization", "Bearer " + token(ALICE, b -> {})))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].attempts_in_window").value(4))
+                .andExpect(jsonPath("$[0].blocked").value(true));
+        mvc.perform(get(alertPath).header("Authorization", "Bearer " + token(BOB, b -> {})))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$").isEmpty());
+
+        webpay.start(BOB, operation(BOB), "webpay-other-account");
+        jdbc.update("UPDATE payment SET created_at=clock_timestamp()-interval '11 seconds' WHERE owner_id=?", ALICE.oid());
+        assertThatThrownBy(() -> webpay.start(ALICE, blockedQuote, "webpay-fourth"))
+                .isInstanceOfSatisfying(ApiException.class, error -> assertThat(error.status).isEqualTo(429));
+        assertThat(webpay.start(ALICE, blockedQuote, "webpay-after-window").pagoId()).isNotEqualTo(blocked);
+        verify(provider, times(5)).create(anyString(), anyString(), eq(12990));
+    }
+
+    @Test
     void webpayReservesTheQuoteAndReconcilesALostCommitWithoutAnotherCharge() {
         var provider = mock(WebpayClient.class);
         var webpay = new WebpayService(jdbc, tx, provider, service);
