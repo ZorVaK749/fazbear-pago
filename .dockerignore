@@ -1,5 +1,6 @@
 .git
-target
+target/*
+!target/ms-pago-*.jar
 .env
 .env.*
 secrets

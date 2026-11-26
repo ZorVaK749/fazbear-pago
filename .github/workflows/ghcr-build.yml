@@ -71,6 +71,7 @@ jobs:
         with:
           context: .
           file: Dockerfile.aws
+          target: ${{ !inputs.frontend && 'packaged' || '' }}
           platforms: linux/amd64
           push: ${{ inputs.publish }}
           tags: ${{ steps.version.outputs.image }}
