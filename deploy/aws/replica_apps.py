@@ -12,6 +12,8 @@ from pathlib import Path
 import re
 import secrets
 import shutil
+import smtplib
+import ssl
 import subprocess
 import sys
 import tempfile
@@ -101,8 +103,12 @@ def wait_until(probe, description, seconds=125):
         time.sleep(3)
 
 
+def container_fingerprint(image, env, options):
+    return hashlib.sha256(json.dumps((image, env, options), sort_keys=True).encode()).hexdigest()
+
+
 def start_container(name, image, env, options, *, image_ready=False):
-    fingerprint = hashlib.sha256(json.dumps((image, env, options), sort_keys=True).encode()).hexdigest()
+    fingerprint = container_fingerprint(image, env, options)
     current = subprocess.run(["docker", "inspect", "--type", "container", name], capture_output=True, text=True)
     if current.returncode == 0:
         instance = json.loads(current.stdout)[0]
@@ -221,6 +227,11 @@ def app(config, credentials):
     if config.get("operation") == "pedidos_receipt":
         release_pedidos(config, env, options)
         return
+    if config.get("operation") == "order_email":
+        if name == "Notificaciones":
+            env.update(smtp_settings(config))
+        release_order_email(config, container_name, env, options)
+        return
     start_container(container_name, config["image"], env, options)
     verify_app(config)
 
@@ -287,6 +298,62 @@ def release_pedidos(config, env, options):
         checked(["docker", "start", name], "Arrancar la revisión anterior de Pedidos")
         verify_app(config)
         raise RuntimeError("La nueva imagen de Pedidos no pasó la verificación. Se recuperó la revisión anterior.") from None
+
+
+def smtp_settings(config):
+    output = checked(["aws", "ssm", "get-parameter", "--region", config["region"],
+                      "--name", config["smtp_parameter"], "--with-decryption", "--query", "Parameter.Value",
+                      "--output", "text"], "Lectura de la configuración SMTP cifrada")
+    try:
+        settings = json.loads(output)
+        sender = settings["sender"]
+        password = settings["password"]
+    except (KeyError, TypeError, ValueError):
+        raise RuntimeError("El parámetro SMTP no tiene el formato esperado.") from None
+    if not valid_gmail(sender, password):
+        raise RuntimeError("El parámetro SMTP requiere un Gmail y una contraseña de aplicación.")
+    try:
+        with smtplib.SMTP("smtp.gmail.com", 587, timeout=10) as client:
+            client.starttls(context=ssl.create_default_context())
+            client.login(sender, password)
+    except smtplib.SMTPAuthenticationError:
+        raise RuntimeError("Gmail rechazó la autenticación. Genera una contraseña de aplicación y vuelve a intentar con --replace-smtp.") from None
+    except (OSError, smtplib.SMTPException):
+        raise RuntimeError("Falló la conexión SMTP con Gmail desde la EC2 de Notificaciones.") from None
+    print("Gmail · autenticación SMTP verificada desde Notificaciones.", flush=True)
+    return {"MAIL_HOST": "smtp.gmail.com", "MAIL_PORT": "587", "MAIL_USERNAME": sender, "MAIL_PASSWORD": password}
+
+
+def release_order_email(config, name, env, options):
+    image = config["image"]
+    info = json.loads(checked(["docker", "inspect", "--type", "container", name], f"Inventario de {name}"))[0]
+    labels = info["Config"].get("Labels") or {}
+    if labels.get(CONTAINER_LABEL) != name or info["Config"]["Image"] not in (image, image_for(config["name"])):
+        raise RuntimeError(f"{name} no coincide con las revisiones de la réplica esperadas.")
+    mounts = [(item["Type"], item["Source"], item["Destination"], item["RW"]) for item in info.get("Mounts", [])]
+    expected = [("bind", str(ROOT / "data" / "notificaciones"), "/var/lib/fazbear/notificaciones", True)]
+    if mounts != (expected if config["name"] == "Notificaciones" else []):
+        raise RuntimeError(f"{name} no tiene el montaje esperado.")
+    if labels.get(CONFIG_LABEL) == container_fingerprint(image, env, options):
+        start_container(name, image, env, options)
+        verify_app(config)
+        return
+    if not info["State"]["Running"]:
+        raise RuntimeError(f"{name} debe estar en ejecución antes del despliegue.")
+    checked(["docker", "pull", image], f"Descarga de {name}")
+    previous = f"{name}-precorreo-{time.time_ns()}"
+    checked(["docker", "rename", name, previous], f"Preparar respaldo de {name}")
+    try:
+        checked(["docker", "stop", "--time", "35", previous], f"Detención de la revisión anterior de {name}")
+        start_container(name, image, env, options, image_ready=True)
+        verify_app(config)
+    except (RuntimeError, OSError, ValueError, subprocess.SubprocessError):
+        if ready_command("docker", "inspect", "--type", "container", name):
+            checked(["docker", "rm", "-f", name], f"Retirar candidato de {name}")
+        checked(["docker", "rename", previous, name], f"Restaurar {name}")
+        checked(["docker", "start", name], f"Arrancar la revisión anterior de {name}")
+        verify_app(config)
+        raise RuntimeError(f"Se restauró la revisión anterior de {name} después de fallar la validación.") from None
 
 
 def webpay_release(config):
@@ -370,7 +437,7 @@ def host_operation(config):
                           "--with-decryption", "--query", "Parameter.Value", "--output", "text"],
                          "Lectura de configuración cifrada por LabInstanceProfile")
         credentials = json.loads(output)
-        if operation in ("app", "pedidos_receipt"):
+        if operation in ("app", "pedidos_receipt", "order_email"):
             app(config, credentials)
         elif operation == "postgres":
             postgres(config["host"], credentials)
@@ -414,6 +481,33 @@ def prepare_webpay_key(aws, parameter):
     with tempfile.TemporaryDirectory(prefix="pedidos360-webpay-") as directory:
         path = Path(directory) / "ssm.json"
         path.write_text(json.dumps({"Name": parameter, "Type": "SecureString", "Value": key}), encoding="utf-8")
+        aws("ssm", "put-parameter", "--cli-input-json", path.resolve().as_uri())
+
+
+def valid_gmail(sender, password):
+    return (isinstance(sender, str) and re.fullmatch(r"[a-zA-Z0-9.]{1,64}@gmail\.com", sender, re.IGNORECASE)
+            and isinstance(password, str) and re.fullmatch(r"[a-zA-Z0-9]{16}", password))
+
+
+def prepare_smtp(aws, parameter, replace):
+    if not replace:
+        try:
+            aws("ssm", "get-parameter", "--name", parameter, "--query", "Parameter.Name")
+            return
+        except RuntimeError as error:
+            if "ParameterNotFound" not in str(error):
+                raise
+    if not sys.stdin.isatty() or not sys.stderr.isatty():
+        raise RuntimeError("Abre CloudShell de forma interactiva para configurar Gmail.")
+    sender = input("Gmail remitente: ").strip()
+    password = "".join(getpass("Contraseña de aplicación de Gmail (entrada oculta): ").split())
+    if not valid_gmail(sender, password):
+        raise RuntimeError("Usa un Gmail y su contraseña de aplicación de 16 caracteres.")
+    with tempfile.TemporaryDirectory(prefix="pedidos360-smtp-") as directory:
+        path = Path(directory) / "ssm.json"
+        value = json.dumps({"sender": sender, "password": password})
+        path.write_text(json.dumps({"Name": parameter, "Type": "SecureString", "Value": value, "Overwrite": replace}),
+                        encoding="utf-8")
         aws("ssm", "put-parameter", "--cli-input-json", path.resolve().as_uri())
 
 
@@ -474,7 +568,7 @@ def verify_targets(aws, stack_name, hosts):
         raise RuntimeError(f"{error} Pendientes: {', '.join(pending)}") from error
 
 
-def launch(account, *, proxy_only=False, webpay_image=None, pedidos_receipt=False):
+def launch(account, *, proxy_only=False, webpay_image=None, pedidos_receipt=False, order_email_image=None, replace_smtp=False):
     from replica_infra import KAFKA_CLIENTS, REGION, SERVICES, STACK, aws
 
     if aws("sts", "get-caller-identity")["Account"] != account:
@@ -486,7 +580,9 @@ def launch(account, *, proxy_only=False, webpay_image=None, pedidos_receipt=Fals
     outputs = {item["OutputKey"]: item["OutputValue"] for item in stack["Outputs"]}
     hosts = {name: outputs[f"{name}Instance"] for name in SERVICES}
     service = "Pago" if webpay_image else "Pedidos" if pedidos_receipt else "Analytics" if proxy_only else None
-    required_hosts = {hosts[service]} if service else set(hosts.values())
+    email_services = ("Notificaciones", "Orden")
+    required_hosts = {hosts[name] for name in email_services} if order_email_image else (
+        {hosts[service]} if service else set(hosts.values()))
 
     def online():
         nodes = aws("ssm", "describe-instance-information")["InstanceInformationList"]
@@ -506,6 +602,16 @@ def launch(account, *, proxy_only=False, webpay_image=None, pedidos_receipt=Fals
         parameter = f"/{STACK}/runtime"
         prepare_credentials(aws, parameter)
         configs = application_configs(outputs, SERVICES, KAFKA_CLIENTS, REGION, parameter)
+        if order_email_image:
+            smtp_parameter = f"/{STACK}/smtp"
+            prepare_smtp(aws, smtp_parameter, replace_smtp)
+            configs["Notificaciones"]["smtp_parameter"] = smtp_parameter
+            configs["Orden"]["image"] = order_email_image
+            for name in email_services:
+                config = {**configs[name], "operation": "order_email"}
+                deploy_many(aws, [(name, hosts[name], config)], payload)
+                verify_targets(aws, STACK, {name: hosts[name]})
+            return
         if pedidos_receipt:
             config = {**configs["Pedidos"], "operation": "pedidos_receipt"}
             deploy_many(aws, [("Pedidos", hosts["Pedidos"], config)], payload)
@@ -529,18 +635,25 @@ def main():
     mode.add_argument("--proxy-only", action="store_true", help="install and check only the private CORS proxy")
     mode.add_argument("--webpay-image", help="roll out only the published Pago V7 image and enable integration Webpay")
     mode.add_argument("--pedidos-receipt", action="store_true", help="roll out Confirmar recepción to Pedidos only")
+    mode.add_argument("--order-email-image", help="enable Gmail in Notificaciones and roll out the Orden image by digest")
+    parser.add_argument("--replace-smtp", action="store_true", help="prompt for new SMTP credentials with --order-email-image")
     parser.add_argument("--host", help=argparse.SUPPRESS)
     args = parser.parse_args()
     if not args.host and (not args.apply or not args.account or len(args.account) != 12 or not args.account.isdecimal()):
         parser.error("usar --account con el ID de cuenta de 12 dígitos y --apply")
     if args.webpay_image and not re.fullmatch(REGISTRY + r"fazbear-pago@sha256:[a-f0-9]{64}", args.webpay_image):
         parser.error("--webpay-image requiere el digest GHCR de Pago")
+    if args.order_email_image and not re.fullmatch(REGISTRY + r"fazbear-orden@sha256:[a-f0-9]{64}", args.order_email_image):
+        parser.error("--order-email-image requiere el digest GHCR de Orden")
+    if args.replace_smtp and not args.order_email_image:
+        parser.error("--replace-smtp requiere --order-email-image")
     try:
         if args.host:
             os.umask(0o077)
             host_operation(json.loads(base64.b64decode(args.host)))
         else:
-            launch(args.account, proxy_only=args.proxy_only, webpay_image=args.webpay_image, pedidos_receipt=args.pedidos_receipt)
+            launch(args.account, proxy_only=args.proxy_only, webpay_image=args.webpay_image, pedidos_receipt=args.pedidos_receipt,
+                   order_email_image=args.order_email_image, replace_smtp=args.replace_smtp)
     except (RuntimeError, OSError, ValueError, subprocess.SubprocessError) as error:
         print(f"ERROR: {error}", file=sys.stderr)
         return 1
